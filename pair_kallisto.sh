@@ -56,7 +56,7 @@ PAIR_COUNT=$(wc -l < "$PAIRS_FILE" | tr -d ' ')
 echo "[INFO] Pairing check OK. Found $PAIR_COUNT pairs."
 cp "$PAIRS_FILE" "$RESULTS_DIR/filenames.checked.txt"
 
-# ---- build mouse cDNA index (Ensembl r114, GRCm39) once ----
+# ---- build mouse cDNA index (Ensembl r115, GRCm39) once ----
 if [[ ! -f "$IDX" ]]; then
   echo "[INFO] Index not found. Building at: $IDX"
   cd "$INDEX_DIR"
