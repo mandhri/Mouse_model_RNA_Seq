@@ -6,10 +6,10 @@ IFS=$'\n\t'
 PROJ_DIR=/mnt/vol1/Mouse_model_RNA_Seq
 TRIM_DIR="$PROJ_DIR/trimmed_fastq"
 INDEX_DIR="$PROJ_DIR/index"
-RESULTS_DIR="$PROJ_DIR/kallisto_results"
+RESULTS_DIR="$PROJ_DIR/kallisto_results_plus_ncRNA"
 LOG_DIR="$RESULTS_DIR/logs"
 THREADS=16
-IDX="$INDEX_DIR/mouse_transcriptome.k31.idx" # index filename
+IDX="$INDEX_DIR/mouse_transcriptome_plus_ncRNA.k31.idx" # index filename
 PAIRS_FILE="$RESULTS_DIR/filenames.txt"     # two columns: R1  R2
 MISSING_REPORT="$RESULTS_DIR/missing_pairs.txt"
 THREECOL="$RESULTS_DIR/abundance_3col.tsv.gz"
@@ -79,7 +79,7 @@ fi
 
 
 # ---- quantify all pairs ----
-: > "$SAMPLES_MANIFEST"
+> "$SAMPLES_MANIFEST"
 echo "[INFO] Starting quantification with $THREADS threads…"
 
 # reads two names per line (two columns from the preflight list)
