@@ -1,0 +1,323 @@
+---
+title: "RNA-Seq_differential_expression_analysis"
+output: html_document
+date: "2025-04-18"
+---
+
+```{r,packages}
+
+
+suppressPackageStartupMessages({
+  library("EnhancedVolcano")
+  library("limma")
+  library("biomaRt")
+  library("annotables")
+  library("tximport")
+  library("apeglm")
+  library("eulerr")
+library("DESeq2")
+  library("HGNChelper")
+  library("tictoc")
+  library("DESeq2")
+  library("kableExtra")
+  library("beeswarm")
+  library("missMethyl")
+  library("gridExtra")
+  library("png")
+  library("metafor")
+  library("ggplot2")
+  library("purrr")
+library("metafor")
+library("dplyr")
+library("readxl")
+library("ggplot2")
+library("tidyverse")
+library("magrittr")
+library("readr")
+library("eulerr")
+library("RColorBrewer")
+library("e1071")
+  library("plotly") 
+  library("pheatmap")
+
+})
+
+CORES=16
+
+```
+# Read the sample manifest and alignment summary
+
+# I ran two types of aligment with kallisto (with and without ncRNA), I have comapred the result of the alingement and choosed the cDNA+ncRNA as the aligment since the aligment percentage is higher in this combo
+
+```{r}
+base <- "/mnt/vol1/Mouse_model_RNA_Seq/kallisto_results_plus_ncRNA/"
+idx  <- "/mnt/vol1/Mouse_model_RNA_Seq/index"
+
+samples <- read_tsv(file.path(base,"samples.txt"),col_names = "sample", show_col_types = FALSE)
+samples$path <- file.path(base, samples$sample, "abundance.tsv")
+
+align <- read_delim("/mnt/vol1/Mouse_model_RNA_Seq/kallisto_results_plus_ncRNA/alignment_summary.tsv")
+
+old_align<-read_csv("/mnt/vol1/Mouse_model_RNA_Seq/kallisto_results/aligment_no_ncrna.csv", show_col_types = FALSE)
+
+new_df <- align     %>% mutate(index = "cDNA + ncRNA",
+                               rate = 100 * pseudoaligned/processed) %>%
+  select(sample, index, rate)
+old_df <- old_align %>% mutate(index = "cDNA only",
+                               rate = 100 * pseudoaligned/processed) %>%
+  select(sample, index, rate)
+
+df <- bind_rows(new_df, old_df)
+
+# Order samples by delta (new - old)
+delta <- df %>% pivot_wider(names_from = index, values_from = rate) %>%
+  mutate(delta = `cDNA + ncRNA` - `cDNA only`) %>%
+  arrange(delta)
+df$sample <- factor(df$sample, levels = delta$sample)
+
+ggplot(df, aes(sample, rate, fill = index)) +
+  geom_col(position = position_dodge(width = 0.75), width = 0.7) +
+  labs(title = "Pseudoalignment rate by sample",
+       x = "Sample", y = "Rate (%)", fill = "Run") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+```
+
+# Import transcripts to gene level via trimport package
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+tx2gene <- read.csv(file.path("/mnt/vol1/Mouse_model_RNA_Seq/tx2gene_r115.csv"), stringsAsFactors = FALSE)
+stopifnot(all(c("TXNAME","GENEID") %in% names(tx2gene)))
+
+files <- file.path(base, samples$sample, "abundance.tsv")
+names(files) <- samples$sample
+stopifnot(all(file.exists(files)))
+
+txi <- tximport(files,
+                type = "kallisto",
+                tx2gene = tx2gene[, c("TXNAME","GENEID")],
+                countsFromAbundance = "lengthScaledTPM",
+                ignoreTxVersion = TRUE)
+
+txi$counts[1:2, 1:6] 
+
+```
+
+# Reading meta data that comes with the samples
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+pheno <- read_excel("/mnt/vol1/Mouse_model_RNA_Seq/minipump.xlsx",skip =1 )
+colnames(pheno)
+
+coldata <- pheno %>%
+  filter(Sample %in% samples$sample) %>%
+  arrange(match(Sample, samples$sample)) %>%
+  mutate(
+    Sex = factor(Sex, levels = c("F","M")),                  # F as baseline
+    Treatment = factor(Intervention, levels = c("Saline","Ang-II"))  # Saline as baseline
+  )
+
+rownames(coldata) <- coldata$Sample
+
+
+```
+
+# Making DESeqDataSet from tximport
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+dds <- DESeqDataSetFromTximport(txi, colData = coldata,
+                                design = ~ Sex + Treatment + Sex:Treatment)
+
+```
+
+
+# Filtering for low count and normalisation of the counts
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+
+keep <- rowSums(counts(dds)) >= 10
+dds  <- dds[keep, ]
+
+dds   <- estimateSizeFactors(dds)
+norm_counts <- counts(dds, normalized = TRUE)
+glimpse(norm_counts)
+
+```
+
+
+# Unsupervised clustering analyses
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+vsd <- vst(dds, blind = TRUE)
+
+ann <- as.data.frame(colData(dds))[, c("Sex","Treatment"), drop = FALSE]
+
+# sample–sample correlation heatmap
+pheatmap(cor(assay(vsd)),
+         annotation_col = ann,
+         annotation_row = ann)
+
+# PCA (colour = Treatment, shape = Sex)
+plotPCA(vsd, intgroup = c("Treatment","Sex"))
+
+## Fit model (set baselines)
+dds$Sex       <- relevel(factor(dds$Sex), "F")
+dds$Treatment <- relevel(factor(dds$Treatment), "Saline")
+design(dds)   <- ~ Sex + Treatment + Sex:Treatment
+dds <- DESeq(dds)
+
+
+```
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+
+
+
+```
+
+# shrinking the log2 fold changes
+
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+# fitting the raw counts to the DESeq2 model
+
+dds_2<- DESeq(dds_1)
+dds_2 <- estimateDispersions(dds_2)
+plotDispEsts(dds_2)
+
+# testing for differential expression
+
+res<- results(dds_2, contrast = c("condition","Control","Treated"), alpha = 0.05)
+
+plotMA(res)
+
+#Apply LFC shrinkage (for ranking)
+resultsNames(dds_2)
+
+# shrink Treated vs Control
+resLFC <- lfcShrink(dds_2,
+                    coef="condition_Treated_vs_Control",
+                    type="apeglm")
+# now invert to get Control vs Treated
+resLFC$log2FoldChange <- -resLFC$log2FoldChange
+
+
+EnhancedVolcano(resLFC,
+                lab = rownames(resLFC),
+                x = 'log2FoldChange',
+                y = 'padj',
+                title = 'Treated vs Control')
+
+
+plotMA(resLFC)
+
+```
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+#To get descriptions for the columns in the results table, we can use the mcols() function
+mcols(resLFC)
+summary(resLFC)
+head(resLFC)
+
+# 
+?annotables
+
+res_all <- as.data.frame(resLFC) %>%
+  rownames_to_column("ensgene") %>%
+  left_join(
+    grcm38 %>% dplyr::select(ensgene, symbol, description),
+    by = "ensgene"
+  )
+
+# Subset the results to only return the significant genes with p-adjusted values less than 0.05
+res_all_sig <- subset(res_all, padj <0.05)
+
+
+
+# How many times each ensgene appears in your annotation?
+dup_counts <- grcm38 %>%
+  count(ensgene) %>%
+  filter(n > 1)
+
+# How many unique IDs are duplicated?
+nrow(dup_counts)
+
+res_all <- as.data.frame(resLFC) %>%
+  rownames_to_column("ensgene") %>%
+  left_join(
+    grcm38 %>% dplyr::select(ensgene, symbol, description),
+    by = "ensgene"
+  ) %>%
+  mutate(threshold = padj < 0.05) 
+
+ggplot(res_all) +
+    geom_point(aes(x = log2FoldChange, y = -log10(padj),
+                   color = threshold)) +
+    xlab("log2 fold change") +
+    ylab("-log10 adjusted p-value") +
+    theme(legend.position = "none",
+          plot.title = element_text(size = rel(1.5), hjust = 0.5),
+          axis.title = element_text(size = rel(1.25)))
+
+
+## Expression plot
+ 
+top20genes <- rownames(resLFC)[head(order(resLFC$padj),20)]
+norm_df <- as.data.frame(norm_counts[top20genes, ]) %>%
+  rownames_to_column("ensgene")
+
+top20_long <- norm_df %>%
+  pivot_longer(
+    cols = -ensgene,
+    names_to = "samplename",
+    values_to = "normalized_counts"
+  ) %>%
+  left_join(
+    metadata2 %>% 
+      rownames_to_column("samplename") %>%
+      dplyr::select(samplename, condition),
+    by = "samplename"
+  )
+
+ggplot(top20_long, aes(x = ensgene, y = normalized_counts, colour = condition)) +
+  geom_jitter(width = 0.2, size = 2, alpha = 0.8) + 
+  scale_y_log10() +
+  labs(
+    x = "Gene (Ensembl ID)",
+    y = "Library-size–normalised count (log scale)",
+    title = "Top 20 Differentially Expressed Genes"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title     = element_text(hjust = 0.5)
+  )
+
+```
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+sessionInfo()
+
+
+```
+
+
+
+
+
+
+
+
