@@ -8,25 +8,25 @@ date: "2025-04-18"
 
 
 suppressPackageStartupMessages({
-  library("EnhancedVolcano")
-  library("limma")
-  library("biomaRt")
-  library("annotables")
-  library("tximport")
-  library("apeglm")
-  library("eulerr")
+library("EnhancedVolcano")
+library("limma")
+library("biomaRt")
+library("annotables")
+library("tximport")
+library("apeglm")
+library("eulerr")
 library("DESeq2")
-  library("HGNChelper")
-  library("tictoc")
-  library("DESeq2")
-  library("kableExtra")
-  library("beeswarm")
-  library("missMethyl")
-  library("gridExtra")
-  library("png")
-  library("metafor")
-  library("ggplot2")
-  library("purrr")
+library("HGNChelper")
+library("tictoc")
+library("DESeq2")
+library("kableExtra")
+library("beeswarm")
+library("missMethyl")
+library("gridExtra")
+library("png")
+library("metafor")
+library("ggplot2")
+library("purrr")
 library("metafor")
 library("dplyr")
 library("readxl")
@@ -37,9 +37,9 @@ library("readr")
 library("eulerr")
 library("RColorBrewer")
 library("e1071")
-  library("plotly") 
-  library("pheatmap")
-
+library("plotly") 
+library("pheatmap")
+library("msigdbr")
 })
 
 CORES=16
@@ -116,12 +116,11 @@ coldata <- pheno %>%
   filter(Sample %in% samples$sample) %>%
   arrange(match(Sample, samples$sample)) %>%
   mutate(
-    Sex = factor(Sex, levels = c("F","M")),                  # F as baseline
-    Treatment = factor(Intervention, levels = c("Saline","Ang-II"))  # Saline as baseline
+    Sex = factor(Sex, levels = c("F","M")), # F as baseline
+    Treatment = factor(Intervention, levels = c("Saline","Ang-II")) # saline as baseline
   )
 
 rownames(coldata) <- coldata$Sample
-
 
 ```
 
@@ -163,7 +162,7 @@ ann <- as.data.frame(colData(dds))[, c("Sex","Treatment"), drop = FALSE]
 # sample–sample correlation heatmap
 pheatmap(cor(assay(vsd)),
          annotation_col = ann,
-         annotation_row = ann)
+         annotation_row = ann) 
 
 # PCA (colour = Treatment, shape = Sex)
 plotPCA(vsd, intgroup = c("Treatment","Sex"))
@@ -181,7 +180,7 @@ dds <- DESeq(dds)
 
 resultsNames(dds)
 
-# baseline (Saline): M vs F
+# baseline (saline): M vs F
 coef_sex <- "Sex_M_vs_F"   
 
 # Ang-II vs Saline in females (F is baseline sex)
@@ -196,10 +195,9 @@ coef_int <- "SexM.TreatmentAng.II"
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
-# RAW results
+### RAW results ###
 
 # 1. Within each Sex
-
 # 1.1 Female: Ang-II vs Saline  
 res_F_raw   <- results(dds, name = coef_trt)
 # 1.2 Male: Ang-II vs Saline  
@@ -207,13 +205,11 @@ res_M_raw   <- results(dds, contrast = list(c(coef_trt, coef_int)))
 
 
 # 2. Effect of Ang-II treatment between sex
-
-# Interaction: difference of treatment effect between sexes (M & F)
 res_int_raw <- results(dds, name = coef_int)
 
-# 3. Baseline (Saline): M vs F
-res_bsl_raw <- results(dds, name = coef_sex)
 
+# 3. Baseline (saline): M vs F
+res_bsl_raw <- results(dds, name = coef_sex)
 
 
 # Shrinkage results
@@ -229,7 +225,7 @@ make_df <- function(raw, shr, label){
     gene    = rownames(raw),
     lfc_raw = raw$log2FoldChange,
     lfc_shr = shr$log2FoldChange,
-    FDR_raw = raw$padj,                 # keep the same FDR for both facets
+    FDR_raw = raw$padj,           
     contrast = label,
     stringsAsFactors = FALSE
   )
@@ -242,7 +238,7 @@ res_all <- bind_rows(
   make_df(res_bsl_raw, res_bsl_shr, "Baseline (Saline): M vs F")
 )
 
-# Long format for faceted volcano (Raw vs Shrunken)
+# Raw vs Shrunken
 res_long <- res_all %>%
   mutate(
     hit_raw = !is.na(FDR_raw) & FDR_raw <= 0.05 & abs(lfc_raw) >= 0.5,
@@ -266,7 +262,7 @@ res_long <- res_all %>%
                                            "Baseline (Saline): M vs F"))
   )
 
-# Axis limits (compact but adaptive)
+# Axis limits
 x_max <- quantile(abs(res_long$lfc), 0.995, na.rm = TRUE)
 x_lim <- c(-max(1.5, x_max), max(1.5, x_max))
 y_max <- quantile(-log10(res_long$FDR_raw), 0.995, na.rm = TRUE)
@@ -280,12 +276,11 @@ ggplot(res_long, aes(lfc, -log10(FDR_raw), colour = hit)) +
   coord_cartesian(xlim = x_lim, ylim = y_lim) +
   facet_grid(contrast ~ lfc_type, switch = "y") +
   scale_colour_manual(values = c("FALSE" = "grey60", "TRUE" = "steelblue4"),
-                      labels = c("FALSE" = "FDR>0.05 or |LFC|<0.5", "TRUE" = "FDR≤0.05 & |LFC|≥0.5"),
-                      name = NULL) +
+                      labels = c("FALSE" = "FDR>0.05 or LFC<0.5", "TRUE" = "FDR≤0.05 &  LFC≥0.5"),name = NULL) +
   labs(
     title = "Volcano comparison: Raw vs Shrunken (ashr)",
     x = "log2 fold change",
-    y = expression(-log[10]("FDR from unshrunken fit"))
+    y = expression(-log[10]("FDR from unshrunken"))
   ) +
   theme_minimal(base_size = 11) +
   theme(
@@ -300,25 +295,133 @@ ggplot(res_long, aes(lfc, -log10(FDR_raw), colour = hit)) +
 
 ```
 
+# Heatmaps of top DE genes per contrast 
+
+
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
+top_heatmap <- function(res_shr, vsd, label, n=40) {
+  keep <- order(res_shr$padj, na.last = NA)[1:min(n, sum(!is.na(res_shr$padj)))]
+  genes <- rownames(res_shr)[keep]
+  mat <- assay(vsd)[genes, , drop=FALSE]
+  mat <- scale(t(scale(t(mat))))  
+  ann  <- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop=FALSE]
+  pheatmap(mat, annotation_col = ann, show_rownames = TRUE,
+           main = paste0("Top ", n, " DE genes: ", label))
+}
 
-
-
+top_heatmap(res_F_shr,   vsd, "F Ang-II vs Saline")
+top_heatmap(res_M_shr,   vsd, "M Ang-II vs Saline")
+top_heatmap(res_int_shr, vsd, "Interaction (M−F)")
+top_heatmap(res_bsl_shr, vsd, "Baseline (M vs F, Saline)")
 
 ```
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+# Map Ensembl to gene symbols 
+
+gtf <- file.path(idx, "Mus_musculus.GRCm39.115.gtf")
+gtf_df <- as.data.frame(rtracklayer::import(gtf))
+
+# For symbols
+ann <- gtf_df %>%
+  filter(type == "gene") %>%
+  transmute(
+    ensgene = sub("\\.\\d+$", "", gene_id),
+    symbol  = gene_name
+  ) %>%
+  distinct()
+
+head(ann)
+
+# Map ensembl to entrez
+map_ensg_to_entrez <- function(ens_ids){
+  ens_ids <- sub("\\.\\d+$","", ens_ids)
+  tibble(ENSEMBL = ens_ids) %>%
+    mutate(ENTREZID = AnnotationDbi::mapIds(
+      org.Mm.eg.db, keys = ENSEMBL, keytype = "ENSEMBL",
+      column = "ENTREZID", multiVals = "first"
+    )) %>%
+    filter(!is.na(ENTREZID)) %>% distinct()
+}
+
+# Rank vectors on entrez 
+rankify_entrez <- function(res_raw, ann_map){
+  df <- as.data.frame(res_raw) %>%
+    rownames_to_column("ensgene") %>%
+    mutate(ensgene = sub("\\.\\d+$","", ensgene)) %>%
+    left_join(ann_map, by = c("ensgene"="ENSEMBL")) %>%
+    filter(!is.na(stat), !is.na(ENTREZID))
+  split(df$stat, df$ENTREZID) %>% vapply(\(v) v[which.max(abs(v))], numeric(1))
+}
+
+ens_all    <- unique(c(rownames(res_F_raw), rownames(res_M_raw),
+                       rownames(res_int_raw), rownames(res_bsl_raw)))
+ann_entrez <- map_ensg_to_entrez(ens_all)
+
+ranks_F_e   <- rankify_entrez(res_F_raw,   ann_entrez)
+ranks_M_e   <- rankify_entrez(res_M_raw,   ann_entrez)
+ranks_Int_e <- rankify_entrez(res_int_raw, ann_entrez)
+ranks_Bas_e <- rankify_entrez(res_bsl_raw, ann_entrez)
+
+# Hallmark pathways (msigdbr), grouped by gs_name
+msig_entrez <- msigdbr(species="Mus musculus", category="H") %>%
+  distinct(gs_name, entrez_gene) %>%
+  group_by(gs_name) %>%
+  summarise(genes = list(unique(entrez_gene)), .groups = "drop") %>%
+  tibble::deframe()
+
+# Overlap 
+ov_Fe <- sapply(msig_entrez, function(g) sum(names(ranks_F_e) %in% g)); summary(ov_Fe)
+
+# GSEA
+run_gsea <- function(ranks, label, pathways) {
+  fgsea::fgseaMultilevel(pathways = pathways, stats = ranks, minSize = 10, maxSize = 2000) %>% arrange(padj) %>% mutate(contrast = label)
+}
+
+gsea_F   <- run_gsea(ranks_F_e,   "F Ang-II vs Saline", msig_entrez)
+gsea_M   <- run_gsea(ranks_M_e,   "M Ang-II vs Saline", msig_entrez)
+gsea_Int <- run_gsea(ranks_Int_e, "Interaction (M−F)",  msig_entrez)
+gsea_Bas <- run_gsea(ranks_Bas_e, "Baseline (M vs F)",  msig_entrez)
+
+gsea_all <- bind_rows(gsea_F, gsea_M, gsea_Int, gsea_Bas)
+gsea_all %>% group_by(contrast) %>% slice_head(n=10)
+
+
+
+length(ranks_F) 
+sum(duplicated(names(ranks_F)))
+summary(ranks_F)
+
+```
+
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+top_k <- gsea_all %>%
+  group_by(contrast) %>%
+  slice_min(padj, n = 10) %>%
+  ungroup() %>%
+  mutate(path = gsub("^HALLMARK_", "", pathway),
+         path = factor(path, levels = rev(unique(path))))
+
+
+
+ggplot(top_k, aes(x = path, y = NES, fill = padj < 0.05)) +
+  geom_col() +
+  coord_flip() +
+  facet_wrap(~ contrast, scales = "free_y") +
+  scale_fill_manual(values = c("TRUE"="steelblue4","FALSE"="grey70"), name="FDR<0.05") +
+  labs(title="Hallmark GSEA (NES)", x=NULL, y="Normalised Enrichment Score") +
+  theme_minimal(base_size = 11)
+
+```
+
 
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 sessionInfo()
 
-
 ```
-
-
-
-
-
-
-
 
