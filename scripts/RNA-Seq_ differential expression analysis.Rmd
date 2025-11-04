@@ -389,9 +389,12 @@ Results of the preliminary states that;
 
 * F vs M LFC scatter: global Pearson r ≈ 0.056 is small but could be because ~95% of genes are near 0, hence noise dominates the correlation.
 
-* The histogram of LFC shows that the values of the res_F_raw and res_M_raw is centred around zero. 
 
-* 
+* Summary of the full model (with interaction) to the reduced model (without interaction) gene-by-gene, shows ~0–4 genes at FDR <0.1 (and 0–1 at FDR < 0.05) out of 41594 genes. Hence it could be deduced that the interaction term adds almost no explanatory power overall. 
+
+* Effect-size difference (M & F) distribution of median −0.023, centred near 0, further proving that Ang-II effect size is similar in males and females overall.
+
+* The histogram of LFC shows that the values of the res_F_raw and res_M_raw is centred around zero(median −0.023), indicating that Ang-II effects are broadly similar between sexes, consistent with the likelihood-ratio test showing negligible evidence for an interaction
 
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
@@ -399,11 +402,6 @@ Results of the preliminary states that;
 # No.of saline and treatment samples of each sex
 table(pheno$Sex, pheno$Intervention)
 
-plot(res_F_raw$log2FoldChange, res_M_raw$log2FoldChange, pch=16, cex=0.4)
-abline(0,1,lty=2) 
-
-# Distribution of M & F interaction LFC
-hist(res_int_raw$log2FoldChange, breaks=80)
 
 # Correlation of the interaction 
 summary(res_F_raw$lfcSE)
@@ -423,6 +421,10 @@ summary(lrt)
 
 lrt05 <- results(dds_lrt, alpha = 0.05)
 summary(lrt05) 
+
+# Distribution of M & F interaction LFC
+hist(res_int_raw$log2FoldChange, breaks=80)
+
 
 ```
 
