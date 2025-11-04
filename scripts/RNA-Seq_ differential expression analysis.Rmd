@@ -45,6 +45,7 @@ library("msigdbr")
 CORES=16
 
 ```
+
 # Read the sample manifest and alignment summary
 
 # I ran two types of aligment with kallisto (with and without ncRNA), I have comapred the result of the alingement and choosed the cDNA+ncRNA as the aligment since the aligment percentage is higher in this combo
@@ -193,6 +194,8 @@ coef_int <- "SexM.TreatmentAng.II"
 
 #  RAW results vs Shrinking the log2 fold changes
 
+## With LFC filtering
+
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
 ### RAW results ###
@@ -234,7 +237,7 @@ make_df <- function(raw, shr, label){
 res_all <- bind_rows(
   make_df(res_F_raw,   res_F_shr,   "Female: Ang-II vs Saline"),
   make_df(res_M_raw,   res_M_shr,   "Male: Ang-II vs Saline"),
-  make_df(res_int_raw, res_int_shr, "Interaction: (M − F) treatment effect"),
+  make_df(res_int_raw, res_int_shr, "Interaction: (M & F) treatment effect"),
   make_df(res_bsl_raw, res_bsl_shr, "Baseline (Saline): M vs F")
 )
 
@@ -244,22 +247,27 @@ res_long <- res_all %>%
     hit_raw = !is.na(FDR_raw) & FDR_raw <= 0.05 & abs(lfc_raw) >= 0.5,
     hit_shr = !is.na(FDR_raw) & FDR_raw <= 0.05 & abs(lfc_shr) >= 0.5
   ) %>%
-  select(gene, contrast, FDR_raw, lfc_raw, lfc_shr, hit_raw, hit_shr) %>%
-  pivot_longer(
+  dplyr::select(gene, contrast, FDR_raw, lfc_raw, lfc_shr, hit_raw, hit_shr) %>%
+  tidyr::pivot_longer(
     cols = c(lfc_raw, lfc_shr, hit_raw, hit_shr),
-    names_to = c(".value","lfc_type"),
-    names_pattern = "(lfc|hit)_(raw|shr)"
+    names_to = c(".value", "lfc_type"),
+    names_sep = "_"              
   ) %>%
   mutate(
-    lfc_type = recode(lfc_type,
-      raw = "Raw LFC (before)",
-      shr = "Shrunken LFC (after)"
+    lfc_type = dplyr::recode(lfc_type,
+      raw = "Raw LFC",
+      shr = "Shrunken LFC"
     ),
-    lfc_type = factor(lfc_type, levels = c("Raw LFC (before)", "Shrunken LFC (after)")),
-    contrast = factor(contrast, levels = c("Female: Ang-II vs Saline",
-                                           "Male: Ang-II vs Saline",
-                                           "Interaction: (M − F) treatment effect",
-                                           "Baseline (Saline): M vs F"))
+    lfc_type = factor(lfc_type, levels = c("Raw LFC", "Shrunken LFC")),
+    contrast = factor(
+      contrast,
+      levels = c(
+        "Female: Ang-II vs Saline",
+        "Male: Ang-II vs Saline",
+        "Interaction: (M & F) treatment effect",
+        "Baseline (Saline): M vs F"
+      )
+    )
   )
 
 # Axis limits
@@ -278,7 +286,7 @@ ggplot(res_long, aes(lfc, -log10(FDR_raw), colour = hit)) +
   scale_colour_manual(values = c("FALSE" = "grey60", "TRUE" = "steelblue4"),
                       labels = c("FALSE" = "FDR>0.05 or LFC<0.5", "TRUE" = "FDR≤0.05 &  LFC≥0.5"),name = NULL) +
   labs(
-    title = "Volcano comparison: Raw vs Shrunken (ashr)",
+    title = "Volcano comparison: Raw vs Shrunken (ashr) with LFC filtering",
     x = "log2 fold change",
     y = expression(-log[10]("FDR from unshrunken"))
   ) +
@@ -294,6 +302,103 @@ ggplot(res_long, aes(lfc, -log10(FDR_raw), colour = hit)) +
 
 
 ```
+
+## Without LFC filtering
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+# Raw vs Shrunken
+res_long_nolfc <- res_all %>%
+  mutate(
+    sig_raw = !is.na(FDR_raw) & FDR_raw <= 0.05,
+    sig_shr = !is.na(FDR_raw) & FDR_raw <= 0.05
+  ) %>%
+  dplyr::select(gene, contrast, FDR_raw, lfc_raw, lfc_shr, sig_raw, sig_shr) %>%
+  tidyr::pivot_longer(
+    cols = c(lfc_raw, lfc_shr, sig_raw, sig_shr),
+    names_to = c(".value", "lfc_type"),
+    names_sep = "_") %>%
+  mutate(
+    lfc_type = recode(lfc_type,
+      raw = "Raw LFC (before)",
+      shr = "Shrunken LFC (after)"),
+    lfc_type = factor(lfc_type, levels = c("Raw LFC (before)", "Shrunken LFC (after)")),
+    contrast = factor(contrast, levels = c(
+      "Female: Ang-II vs Saline",
+      "Male: Ang-II vs Saline",
+      "Interaction: (M − F) treatment effect",
+      "Baseline (Saline): M vs F"
+    ))
+  )
+
+# Axis limits
+x_max <- quantile(abs(res_long_nolfc$lfc), 0.995, na.rm = TRUE)
+x_lim <- c(-max(1.5, x_max), max(1.5, x_max))
+y_max <- quantile(-log10(res_long_nolfc$FDR_raw), 0.995, na.rm = TRUE)
+y_lim <- c(0, max(5, y_max))
+
+# Plot
+ggplot(res_long_nolfc, aes(lfc, -log10(FDR_raw), colour = sig)) +
+  geom_point(alpha = 0.6, size = 1.2) +
+  geom_hline(yintercept = -log10(0.05), linetype = 2) +
+  coord_cartesian(xlim = x_lim, ylim = y_lim) +
+  facet_grid(contrast ~ lfc_type, switch = "y") +
+  scale_colour_manual(
+    values = c("FALSE" = "grey60", "TRUE" = "steelblue4"),
+    labels = c("FALSE" = "FDR > 0.05", "TRUE" = "FDR ≤ 0.05"),
+    name = NULL
+  ) +
+  labs(
+    title = "Volcano comparison: Raw vs Shrunken (ashr) without LFC filtering",
+    x = "log2 fold change",
+    y = expression(-log[10]("FDR (from unshrunken fit)"))
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    strip.placement = "outside",
+    strip.background = element_blank(),
+    strip.text.x = element_text(face = "bold"),
+    strip.text.y.left = element_text(angle = 0, face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+
+```
+
+
+# Diagnostics
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+# No.of saline and treatment samples of each sex
+table(pheno$Sex, pheno$Intervention)
+
+sig <- res_F_raw$padj <= 0.05
+big <- abs(res_F_shr$log2FoldChange) >= 0.5
+table(sig)
+table(big)
+
+plot(res_F_raw$log2FoldChange, res_M_raw$log2FoldChange, pch=16, cex=0.4)
+abline(0,1,lty=2) 
+
+# Distribution of M − F interaction LFC
+hist(res_int_raw$log2FoldChange, breaks=80)
+
+# Correlation of the interaction 
+summary(res_F_raw$lfcSE); summary(res_M_raw$lfcSE)
+cor.test(res_F_raw$log2FoldChange, res_M_raw$log2FoldChange, use="complete.obs")
+
+
+
+
+
+```
+
+
+
+
 
 # Heatmaps of top DE genes per contrast 
 
@@ -312,15 +417,18 @@ top_heatmap <- function(res_shr, vsd, label, n=40) {
 
 top_heatmap(res_F_shr,   vsd, "F Ang-II vs Saline")
 top_heatmap(res_M_shr,   vsd, "M Ang-II vs Saline")
-top_heatmap(res_int_shr, vsd, "Interaction (M−F)")
+top_heatmap(res_int_shr, vsd, "Interaction (M&F)")
 top_heatmap(res_bsl_shr, vsd, "Baseline (M vs F, Saline)")
 
 ```
 
 
-```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-# Map Ensembl to gene symbols 
+MSigDB “Hallmarks” (collection H) = 50 core biological with minimal overlap gene sets that capture broad, well-defined biological processes. 
 
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+# Map Ensembl to gene symbols 
 gtf <- file.path(idx, "Mus_musculus.GRCm39.115.gtf")
 gtf_df <- as.data.frame(rtracklayer::import(gtf))
 
