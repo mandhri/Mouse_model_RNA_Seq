@@ -281,7 +281,7 @@ ggplot(res_long, aes(lfc, -log10(FDR_raw), colour = hit)) +
   coord_cartesian(xlim = x_lim, ylim = y_lim) +
   facet_grid(contrast ~ lfc_type, switch = "y") +
   scale_colour_manual(values = c("FALSE" = "grey60", "TRUE" = "steelblue4"),
-                      labels = c("FALSE" = "FDR>0.05 or LFC<0.5", "TRUE" = "FDR≤0.05 &  LFC≥0.5"),name = NULL) +
+                      labels = c("FALSE" = "FDR>0.05 or LFC<0.5", "TRUE" = "FDR<=0.05 &  LFC>=0.5"),name = NULL) +
   labs(
     title = "Volcano comparison: Raw vs Shrunken (ashr) with LFC filtering",
     x = "log2 fold change",
@@ -428,7 +428,13 @@ hist(res_int_raw$log2FoldChange, breaks=80)
 
 ```
 
-# Heatmaps of top DE genes per contrast 
+# Heatmaps of top 40 genes per contrast 
+
+
+Interaction heatmap shows the “top 40 by smallest FDR"
+
+
+
 
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
@@ -448,7 +454,59 @@ top_heatmap(res_M_shr,   vsd, "M Ang-II vs Saline")
 top_heatmap(res_int_shr, vsd, "Interaction (M & F)")
 top_heatmap(res_bsl_shr, vsd, "Baseline (M vs F, Saline)")
 
+
+
+# Female-only view of female contrast genes
+female_cols <- colData(vsd)$Sex == "F"
+top_heatmap(res_F_shr, vsd[, female_cols], "F Ang-II vs Saline (female samples)")
+
+# Male-only view of male contrast genes
+male_cols <- colData(vsd)$Sex == "M"
+top_heatmap(res_M_shr, vsd[, male_cols], "M Ang-II vs Saline (male samples)")
+
 ```
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+top_heatmap_sig <- function(res_shr, vsd, label, n=40, alpha=0.05){
+  sig <- which(!is.na(res_shr$padj) & res_shr$padj <= alpha)
+  if (length(sig) == 0) {
+    message("No genes pass FDR <= ", alpha, " for: ", label)
+    return(invisible(NULL))
+  }
+  keep  <- head(sig[order(res_shr$padj[sig])], n)
+  genes <- rownames(res_shr)[keep]
+  mat   <- assay(vsd)[genes, , drop=FALSE]
+  mat   <- scale(t(scale(t(mat))))
+  ann   <- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop=FALSE]
+  pheatmap(mat, annotation_col=ann, show_rownames=TRUE,
+           main=sprintf("Top %d genes (FDR <= %.2g): %s", length(genes), alpha, label))
+}
+
+top_heatmap_sig(res_F_shr,   vsd, "F Ang-II vs Saline")
+top_heatmap_sig(res_M_shr,   vsd, "M Ang-II vs Saline")
+top_heatmap_sig(res_bsl_shr, vsd, "Baseline (M vs F, Saline)")
+sum(res_int_shr$padj <= 0.05, na.rm=TRUE)
+
+
+
+
+# Female-only view of female contrast genes
+female_cols <- colData(vsd)$Sex == "F"
+top_heatmap_sig(res_F_shr, vsd[, female_cols], "F Ang-II vs Saline (female samples)")
+
+# Male-only view of male contrast genes
+male_cols <- colData(vsd)$Sex == "M"
+top_heatmap_sig(res_M_shr, vsd[, male_cols], "M Ang-II vs Saline (male samples)")
+
+
+
+```
+
+
+# Pathway enrichment Analysis
+
+## GSEA
 
 
 MSigDB “Hallmarks” (collection H) = 50 core biological with minimal overlap gene sets that capture broad, well-defined biological processes. 
@@ -541,8 +599,6 @@ top_k <- gsea_all %>%
   ungroup() %>%
   mutate(path = gsub("^HALLMARK_", "", pathway),
          path = factor(path, levels = rev(unique(path))))
-
-
 
 ggplot(top_k, aes(x = path, y = NES, fill = padj < 0.05)) +
   geom_col() +
