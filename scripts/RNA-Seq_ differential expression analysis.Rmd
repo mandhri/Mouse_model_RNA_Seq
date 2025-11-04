@@ -369,6 +369,12 @@ ggplot(res_long_nolfc, aes(lfc, -log10(FDR_raw), colour = sig)) +
 
 The interaction coefficient (SexM.TreatmentAng.II) is a difference-in-differences. If β_int ~ 0 for most genes, it means the Ang-II effect is about the same in males and females. Therefore, it could be assume that there can be still many DE genes within each sex but with small effects, however, the extra difference between males and females could almost be negligible for Ang-II.
 
+
+R=reduced model
+The LRT is comparing the full model to the reduced model to identify significant genes. The p-values are determined solely by the difference in deviance between the ‘full’ and ‘reduced’ model formula (not log2 fold changes). Essentially the LRT test is testing whether the term(s) removed in the ‘reduced’ model explains a significant amount of variation in the data. Quoted https://hbctraining.github.io/DGE_workshop/lessons/08_DGE_LRT.html
+
+
+
 Context:
 
 So in the case, where females are baseline/ reference;
@@ -381,31 +387,17 @@ Results of the preliminary states that;
 
 * Group sizes: F (4 Ang-II, 3 Saline), M (4 Ang-II, 6 Saline) = unbalanced and  small
 
-* Female DE: 351 genes at FDR≤0.05, Male has fewer (29)
-
 * F vs M LFC scatter: global Pearson r ≈ 0.056 is small but could be because ~95% of genes are near 0, hence noise dominates the correlation.
 
 * The histogram of LFC shows that the values of the res_F_raw and res_M_raw is centred around zero. 
+
+* 
 
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
 # No.of saline and treatment samples of each sex
 table(pheno$Sex, pheno$Intervention)
-
-# Feamles
-sig<- res_F_raw$padj <= 0.05
-table(sig)
-big<- abs(res_F_raw$log2FoldChange) >= 0.5
-table(big)
-
-# Males
-
-sig<- res_M_raw$padj <= 0.05
-table(sig)
-big<- abs(res_M_raw$log2FoldChange) >= 0.5
-table(big)
-
 
 plot(res_F_raw$log2FoldChange, res_M_raw$log2FoldChange, pch=16, cex=0.4)
 abline(0,1,lty=2) 
@@ -414,16 +406,17 @@ abline(0,1,lty=2)
 hist(res_int_raw$log2FoldChange, breaks=80)
 
 # Correlation of the interaction 
-summary(res_F_raw$lfcSE); summary(res_M_raw$lfcSE)
+summary(res_F_raw$lfcSE)
+summary(res_M_raw$lfcSE)
 cor.test(res_F_raw$log2FoldChange, res_M_raw$log2FoldChange, use="complete.obs")
 
 
 lfc_F <- res_F_raw$log2FoldChange         
 lfc_M <- res_M_raw$log2FoldChange       
 delta  <- lfc_M - lfc_F   
-
 summary(delta)
 
+# Model without interaction term (Hypothesis testing: Likelihood ratio test (LRT))
 dds_lrt <- DESeq(dds, test = "LRT", reduced = ~ Sex + Treatment)
 lrt     <- results(dds_lrt)   
 summary(lrt)
