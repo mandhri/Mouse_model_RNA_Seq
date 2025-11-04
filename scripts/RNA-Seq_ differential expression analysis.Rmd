@@ -51,27 +51,25 @@ CORES=16
 # I ran two types of aligment with kallisto (with and without ncRNA), I have comapred the result of the alingement and choosed the cDNA+ncRNA as the aligment since the aligment percentage is higher in this combo
 
 ```{r}
-base <- "/mnt/vol1/Mouse_model_RNA_Seq/kallisto_results_plus_ncRNA/"
-idx  <- "/mnt/vol1/Mouse_model_RNA_Seq/index"
+base<- "/mnt/vol1/Mouse_model_RNA_Seq/kallisto_results_plus_ncRNA/"
+idx<- "/mnt/vol1/Mouse_model_RNA_Seq/index"
 
-samples <- read_tsv(file.path(base,"samples.txt"),col_names = "sample", show_col_types = FALSE)
+samples<- read_tsv(file.path(base,"samples.txt"),col_names = "sample", show_col_types = FALSE)
 samples$path <- file.path(base, samples$sample, "abundance.tsv")
 
-align <- read_delim("/mnt/vol1/Mouse_model_RNA_Seq/kallisto_results_plus_ncRNA/alignment_summary.tsv")
+align<- read_delim("/mnt/vol1/Mouse_model_RNA_Seq/kallisto_results_plus_ncRNA/alignment_summary.tsv")
 
 old_align<-read_csv("/mnt/vol1/Mouse_model_RNA_Seq/kallisto_results/aligment_no_ncrna.csv", show_col_types = FALSE)
 
-new_df <- align     %>% mutate(index = "cDNA + ncRNA",
-                               rate = 100 * pseudoaligned/processed) %>%
-  select(sample, index, rate)
-old_df <- old_align %>% mutate(index = "cDNA only",
-                               rate = 100 * pseudoaligned/processed) %>%
+new_df<- align%>% mutate(index = "cDNA + ncRNA", rate = 100 * pseudoaligned/processed) %>%
+ select(sample, index, rate)
+old_df <- old_align %>% mutate(index = "cDNA only",                               rate = 100 * pseudoaligned/processed) %>%
   select(sample, index, rate)
 
-df <- bind_rows(new_df, old_df)
+df<- bind_rows(new_df, old_df)
 
 # Order samples by delta (new - old)
-delta <- df %>% pivot_wider(names_from = index, values_from = rate) %>%
+delta<- df %>% pivot_wider(names_from = index, values_from = rate) %>%
   mutate(delta = `cDNA + ncRNA` - `cDNA only`) %>%
   arrange(delta)
 df$sample <- factor(df$sample, levels = delta$sample)
@@ -89,14 +87,14 @@ ggplot(df, aes(sample, rate, fill = index)) +
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
-tx2gene <- read.csv(file.path("/mnt/vol1/Mouse_model_RNA_Seq/tx2gene_r115.csv"), stringsAsFactors = FALSE)
+tx2gene<- read.csv(file.path("/mnt/vol1/Mouse_model_RNA_Seq/tx2gene_r115.csv"), stringsAsFactors = FALSE)
 stopifnot(all(c("TXNAME","GENEID") %in% names(tx2gene)))
 
-files <- file.path(base, samples$sample, "abundance.tsv")
+files<- file.path(base, samples$sample, "abundance.tsv")
 names(files) <- samples$sample
 stopifnot(all(file.exists(files)))
 
-txi <- tximport(files,
+txi<- tximport(files,
                 type = "kallisto",
                 tx2gene = tx2gene[, c("TXNAME","GENEID")],
                 countsFromAbundance = "lengthScaledTPM",
@@ -110,18 +108,17 @@ txi$counts[1:2, 1:6]
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
-pheno <- read_excel("/mnt/vol1/Mouse_model_RNA_Seq/minipump.xlsx",skip =1 )
+pheno<- read_excel("/mnt/vol1/Mouse_model_RNA_Seq/minipump.xlsx",skip =1 )
 colnames(pheno)
 
-coldata <- pheno %>%
+coldata<- pheno %>%
   filter(Sample %in% samples$sample) %>%
   arrange(match(Sample, samples$sample)) %>%
   mutate(
     Sex = factor(Sex, levels = c("F","M")), # F as baseline
-    Treatment = factor(Intervention, levels = c("Saline","Ang-II")) # saline as baseline
-  )
+    Treatment = factor(Intervention, levels = c("Saline","Ang-II"))) # saline as baseline
 
-rownames(coldata) <- coldata$Sample
+rownames(coldata)<- coldata$Sample
 
 ```
 
@@ -130,8 +127,7 @@ rownames(coldata) <- coldata$Sample
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
-dds <- DESeqDataSetFromTximport(txi, colData = coldata,
-                                design = ~ Sex + Treatment + Sex:Treatment)
+dds<- DESeqDataSetFromTximport(txi, colData = coldata, design = ~ Sex + Treatment + Sex:Treatment)
 
 ```
 
@@ -142,11 +138,11 @@ dds <- DESeqDataSetFromTximport(txi, colData = coldata,
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
 
-keep <- rowSums(counts(dds)) >= 10
-dds  <- dds[keep, ]
+keep<- rowSums(counts(dds)) >= 10
+dds<- dds[keep, ]
 
-dds   <- estimateSizeFactors(dds)
-norm_counts <- counts(dds, normalized = TRUE)
+dds<- estimateSizeFactors(dds)
+norm_counts<- counts(dds, normalized = TRUE)
 glimpse(norm_counts)
 
 ```
@@ -156,9 +152,9 @@ glimpse(norm_counts)
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
-vsd <- vst(dds, blind = TRUE)
+vsd<- vst(dds, blind = TRUE)
 
-ann <- as.data.frame(colData(dds))[, c("Sex","Treatment"), drop = FALSE]
+ann<- as.data.frame(colData(dds))[, c("Sex","Treatment"), drop = FALSE]
 
 # sample–sample correlation heatmap
 pheatmap(cor(assay(vsd)),
@@ -169,10 +165,10 @@ pheatmap(cor(assay(vsd)),
 plotPCA(vsd, intgroup = c("Treatment","Sex"))
 
 ## Fit model (set baselines)
-dds$Sex       <- relevel(factor(dds$Sex), "F")
-dds$Treatment <- relevel(factor(dds$Treatment), "Saline")
-design(dds)   <- ~ Sex + Treatment + Sex:Treatment
-dds <- DESeq(dds)
+dds$Sex<- relevel(factor(dds$Sex), "F")
+dds$Treatment<- relevel(factor(dds$Treatment), "Saline")
+design(dds)<- ~ Sex + Treatment + Sex:Treatment
+dds<- DESeq(dds)
 
 
 ```
@@ -182,13 +178,13 @@ dds <- DESeq(dds)
 resultsNames(dds)
 
 # baseline (saline): M vs F
-coef_sex <- "Sex_M_vs_F"   
+coef_sex<- "Sex_M_vs_F"   
 
 # Ang-II vs Saline in females (F is baseline sex)
-coef_trt <- "Treatment_Ang.II_vs_Saline"  
+coef_trt<- "Treatment_Ang.II_vs_Saline"  
 
 # (Ang-II effect in M) & (Ang-II effect in F)
-coef_int <- "SexM.TreatmentAng.II"        
+coef_int<- "SexM.TreatmentAng.II"        
 
 ```
 
@@ -196,37 +192,38 @@ coef_int <- "SexM.TreatmentAng.II"
 
 ## With LFC filtering
 
+
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
 ### RAW results ###
 
 # 1. Within each Sex
 # 1.1 Female: Ang-II vs Saline  
-res_F_raw   <- results(dds, name = coef_trt)
+res_F_raw<- results(dds, name = coef_trt)
 # 1.2 Male: Ang-II vs Saline  
-res_M_raw   <- results(dds, contrast = list(c(coef_trt, coef_int)))
+res_M_raw<- results(dds, contrast = list(c(coef_trt, coef_int)))
 
 
 # 2. Effect of Ang-II treatment between sex
-res_int_raw <- results(dds, name = coef_int)
+res_int_raw<- results(dds, name = coef_int)
 
 
 # 3. Baseline (saline): M vs F
-res_bsl_raw <- results(dds, name = coef_sex)
+res_bsl_raw<- results(dds, name = coef_sex)
 
 
 # Shrinkage results
 
-res_F_shr   <- lfcShrink(dds, coef     = coef_trt, type = "ashr")
-res_M_shr   <- lfcShrink(dds, contrast = list(c(coef_trt, coef_int)), type = "ashr")
-res_int_shr <- lfcShrink(dds, coef     = coef_int, type = "ashr")
-res_bsl_shr <- lfcShrink(dds, coef     = coef_sex, type = "ashr")
+res_F_shr<- lfcShrink(dds, coef = coef_trt, type = "ashr")
+res_M_shr<- lfcShrink(dds, contrast= list(c(coef_trt, coef_int)), type = "ashr")
+res_int_shr<- lfcShrink(dds, coef = coef_int, type = "ashr")
+res_bsl_shr<- lfcShrink(dds, coef = coef_sex, type = "ashr")
 
 
-make_df <- function(raw, shr, label){
+make_df<- function(raw, shr, label){
   data.frame(
-    gene    = rownames(raw),
-    lfc_raw = raw$log2FoldChange,
+    gene = rownames(raw),
+    lfc_raw= raw$log2FoldChange,
     lfc_shr = shr$log2FoldChange,
     FDR_raw = raw$padj,           
     contrast = label,
@@ -234,24 +231,24 @@ make_df <- function(raw, shr, label){
   )
 }
 
-res_all <- bind_rows(
-  make_df(res_F_raw,   res_F_shr,   "Female: Ang-II vs Saline"),
-  make_df(res_M_raw,   res_M_shr,   "Male: Ang-II vs Saline"),
-  make_df(res_int_raw, res_int_shr, "Interaction: (M & F) treatment effect"),
+res_all<- bind_rows(
+  make_df(res_F_raw, res_F_shr, "Female: Ang-II vs Saline"),
+  make_df(res_M_raw, res_M_shr, "Male: Ang-II vs Saline"),
+  make_df(res_int_raw, res_int_shr,"Interaction: (M & F) treatment effect"),
   make_df(res_bsl_raw, res_bsl_shr, "Baseline (Saline): M vs F")
-)
+) 
 
 # Raw vs Shrunken
-res_long <- res_all %>%
+res_long<- res_all %>%
   mutate(
-    hit_raw = !is.na(FDR_raw) & FDR_raw <= 0.05 & abs(lfc_raw) >= 0.5,
-    hit_shr = !is.na(FDR_raw) & FDR_raw <= 0.05 & abs(lfc_shr) >= 0.5
+    hit_raw= !is.na(FDR_raw) & FDR_raw<= 0.05 & abs(lfc_raw)>= 0.5,
+    hit_shr= !is.na(FDR_raw) & FDR_raw<= 0.05 & abs(lfc_shr)>= 0.5
   ) %>%
   dplyr::select(gene, contrast, FDR_raw, lfc_raw, lfc_shr, hit_raw, hit_shr) %>%
   tidyr::pivot_longer(
     cols = c(lfc_raw, lfc_shr, hit_raw, hit_shr),
-    names_to = c(".value", "lfc_type"),
-    names_sep = "_"              
+    names_to= c(".value", "lfc_type"),
+    names_sep= "_"              
   ) %>%
   mutate(
     lfc_type = dplyr::recode(lfc_type,
@@ -271,10 +268,10 @@ res_long <- res_all %>%
   )
 
 # Axis limits
-x_max <- quantile(abs(res_long$lfc), 0.995, na.rm = TRUE)
-x_lim <- c(-max(1.5, x_max), max(1.5, x_max))
-y_max <- quantile(-log10(res_long$FDR_raw), 0.995, na.rm = TRUE)
-y_lim <- c(0, max(5, y_max))
+x_max<- quantile(abs(res_long$lfc), 0.995, na.rm = TRUE)
+x_lim<- c(-max(1.5, x_max), max(1.5, x_max))
+y_max<- quantile(-log10(res_long$FDR_raw), 0.995, na.rm = TRUE)
+y_lim<- c(0, max(5, y_max))
 
 # Faceted volcano: rows = contrasts, columns = Raw vs Shrunken
 ggplot(res_long, aes(lfc, -log10(FDR_raw), colour = hit)) +
@@ -309,7 +306,7 @@ ggplot(res_long, aes(lfc, -log10(FDR_raw), colour = hit)) +
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
 # Raw vs Shrunken
-res_long_nolfc <- res_all %>%
+res_long_nolfc<- res_all %>%
   mutate(
     sig_raw = !is.na(FDR_raw) & FDR_raw <= 0.05,
     sig_shr = !is.na(FDR_raw) & FDR_raw <= 0.05
@@ -318,13 +315,13 @@ res_long_nolfc <- res_all %>%
   tidyr::pivot_longer(
     cols = c(lfc_raw, lfc_shr, sig_raw, sig_shr),
     names_to = c(".value", "lfc_type"),
-    names_sep = "_") %>%
+    names_sep= "_") %>%
   mutate(
     lfc_type = recode(lfc_type,
       raw = "Raw LFC (before)",
       shr = "Shrunken LFC (after)"),
     lfc_type = factor(lfc_type, levels = c("Raw LFC (before)", "Shrunken LFC (after)")),
-    contrast = factor(contrast, levels = c(
+    contrast= factor(contrast, levels = c(
       "Female: Ang-II vs Saline",
       "Male: Ang-II vs Saline",
       "Interaction: (M & F) treatment effect",
@@ -333,10 +330,10 @@ res_long_nolfc <- res_all %>%
   )
 
 # Axis limits
-x_max <- quantile(abs(res_long_nolfc$lfc), 0.995, na.rm = TRUE)
-x_lim <- c(-max(1.5, x_max), max(1.5, x_max))
-y_max <- quantile(-log10(res_long_nolfc$FDR_raw), 0.995, na.rm = TRUE)
-y_lim <- c(0, max(5, y_max))
+x_max<- quantile(abs(res_long_nolfc$lfc), 0.995, na.rm = TRUE)
+x_lim<- c(-max(1.5, x_max), max(1.5, x_max))
+y_max<- quantile(-log10(res_long_nolfc$FDR_raw), 0.995, na.rm = TRUE)
+y_lim<- c(0, max(5, y_max))
 
 # Plot
 ggplot(res_long_nolfc, aes(lfc, -log10(FDR_raw), colour = sig)) +
@@ -370,20 +367,50 @@ ggplot(res_long_nolfc, aes(lfc, -log10(FDR_raw), colour = sig)) +
 
 # Diagnostics
 
+The interaction coefficient (SexM.TreatmentAng.II) is a difference-in-differences. If β_int ~ 0 for most genes, it means the Ang-II effect is about the same in males and females. Therefore, it could be assume that there can be still many DE genes within each sex but with small effects, however, the extra difference between males and females could almost be negligible for Ang-II.
+
+Context:
+
+So in the case, where females are baseline/ reference;
+* β_int > 0: Ang-II effect is larger in males than females.
+
+* β_int < 0: Ang-II effect is smaller in males (or larger in females).
+
+
+Results of the preliminary states that;
+
+* Group sizes: F (4 Ang-II, 3 Saline), M (4 Ang-II, 6 Saline) = unbalanced and  small
+
+* Female DE: 351 genes at FDR≤0.05, Male has fewer (29)
+
+* F vs M LFC scatter: global Pearson r ≈ 0.056 is small but could be because ~95% of genes are near 0, hence noise dominates the correlation.
+
+* The histogram of LFC shows that the values of the res_F_raw and res_M_raw is centred around zero. 
+
+
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
 # No.of saline and treatment samples of each sex
 table(pheno$Sex, pheno$Intervention)
 
-sig <- res_F_raw$padj <= 0.05
-big <- abs(res_F_shr$log2FoldChange) >= 0.5
+# Feamles
+sig<- res_F_raw$padj <= 0.05
 table(sig)
+big<- abs(res_F_raw$log2FoldChange) >= 0.5
 table(big)
+
+# Males
+
+sig<- res_M_raw$padj <= 0.05
+table(sig)
+big<- abs(res_M_raw$log2FoldChange) >= 0.5
+table(big)
+
 
 plot(res_F_raw$log2FoldChange, res_M_raw$log2FoldChange, pch=16, cex=0.4)
 abline(0,1,lty=2) 
 
-# Distribution of M − F interaction LFC
+# Distribution of M & F interaction LFC
 hist(res_int_raw$log2FoldChange, breaks=80)
 
 # Correlation of the interaction 
@@ -391,14 +418,20 @@ summary(res_F_raw$lfcSE); summary(res_M_raw$lfcSE)
 cor.test(res_F_raw$log2FoldChange, res_M_raw$log2FoldChange, use="complete.obs")
 
 
+lfc_F <- res_F_raw$log2FoldChange         
+lfc_M <- res_M_raw$log2FoldChange       
+delta  <- lfc_M - lfc_F   
 
+summary(delta)
 
+dds_lrt <- DESeq(dds, test = "LRT", reduced = ~ Sex + Treatment)
+lrt     <- results(dds_lrt)   
+summary(lrt)
+
+lrt05 <- results(dds_lrt, alpha = 0.05)
+summary(lrt05) 
 
 ```
-
-
-
-
 
 # Heatmaps of top DE genes per contrast 
 
