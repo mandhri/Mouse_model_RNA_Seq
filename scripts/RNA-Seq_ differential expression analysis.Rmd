@@ -327,7 +327,7 @@ res_long_nolfc <- res_all %>%
     contrast = factor(contrast, levels = c(
       "Female: Ang-II vs Saline",
       "Male: Ang-II vs Saline",
-      "Interaction: (M − F) treatment effect",
+      "Interaction: (M & F) treatment effect",
       "Baseline (Saline): M vs F"
     ))
   )
@@ -417,7 +417,7 @@ top_heatmap <- function(res_shr, vsd, label, n=40) {
 
 top_heatmap(res_F_shr,   vsd, "F Ang-II vs Saline")
 top_heatmap(res_M_shr,   vsd, "M Ang-II vs Saline")
-top_heatmap(res_int_shr, vsd, "Interaction (M&F)")
+top_heatmap(res_int_shr, vsd, "Interaction (M & F)")
 top_heatmap(res_bsl_shr, vsd, "Baseline (M vs F, Saline)")
 
 ```
@@ -490,7 +490,7 @@ run_gsea <- function(ranks, label, pathways) {
 
 gsea_F   <- run_gsea(ranks_F_e,   "F Ang-II vs Saline", msig_entrez)
 gsea_M   <- run_gsea(ranks_M_e,   "M Ang-II vs Saline", msig_entrez)
-gsea_Int <- run_gsea(ranks_Int_e, "Interaction (M−F)",  msig_entrez)
+gsea_Int <- run_gsea(ranks_Int_e, "Interaction (M & F)",  msig_entrez)
 gsea_Bas <- run_gsea(ranks_Bas_e, "Baseline (M vs F)",  msig_entrez)
 
 gsea_all <- bind_rows(gsea_F, gsea_M, gsea_Int, gsea_Bas)
