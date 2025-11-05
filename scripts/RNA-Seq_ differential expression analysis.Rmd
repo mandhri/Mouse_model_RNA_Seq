@@ -642,7 +642,7 @@ ggplot(top_k, aes(x = path, y = NES, fill = NES > 0)) +
   scale_fill_manual(
     values = c("TRUE" = "firebrick", "FALSE" = "steelblue"),
     name   = "Direction",
-    labels = c("FALSE" = "Enriched in down genes", "TRUE" = "Enriched in up genes")
+    labels = c("FALSE" = "Enriched in genes lower in this contrast", "TRUE" = "Enriched in genes higher in this contrast")
   ) +
   labs(
     title = "Top 10 Hallmark pathways per contrast",
@@ -654,6 +654,7 @@ ggplot(top_k, aes(x = path, y = NES, fill = NES > 0)) +
 
 ```
 
+# Mitch
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
