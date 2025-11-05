@@ -506,7 +506,7 @@ top_heatmap_sig(res_M_shr, vsd[, male_cols], "M Ang-II vs Saline (male samples)"
 
 # Pathway enrichment Analysis
 
-## GSEA
+## GSEA (Hallmarks)
 
 
 MSigDB “Hallmarks” (collection H) = 50 core biological with minimal overlap gene sets that capture broad, well-defined biological processes. 
@@ -654,9 +654,261 @@ ggplot(top_k, aes(x = path, y = NES, fill = NES > 0)) +
 
 ```
 
-# Mitch
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+
+# GO: BP pathways (msigdbr), grouped by gs_name
+msig_entrez <- msigdbr(species="Mus musculus", category="C5", subcategory = "GO:BP") %>%
+  distinct(gs_name, entrez_gene) %>%
+  group_by(gs_name) %>%
+  summarise(genes = list(unique(entrez_gene)), .groups = "drop") %>%
+  tibble::deframe()
+
+# Overlap 
+ov_Fe <- sapply(msig_entrez, function(g) sum(names(ranks_F_e) %in% g)); summary(ov_Fe)
+
+# GSEA
+run_gsea <- function(ranks, label, pathways) {
+  fgsea::fgseaMultilevel(pathways = pathways, stats = ranks, minSize = 10, maxSize = 2000) %>% arrange(padj) %>% mutate(contrast = label)
+}
+
+gsea_F   <- run_gsea(ranks_F_e,   "F Ang-II vs Saline", msig_entrez)
+gsea_M   <- run_gsea(ranks_M_e,   "M Ang-II vs Saline", msig_entrez)
+gsea_Int <- run_gsea(ranks_Int_e, "Interaction (M & F)",  msig_entrez)
+gsea_Bas <- run_gsea(ranks_Bas_e, "Baseline (M vs F)",  msig_entrez)
+
+gsea_all <- bind_rows(gsea_F, gsea_M, gsea_Int, gsea_Bas)
+gsea_all %>% group_by(contrast) %>% slice_head(n=10)
+
+
+
+length(ranks_F_e)
+sum(duplicated(names(ranks_F_e)))
+summary(ranks_F_e)
+
+```
+
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+#sessionInfo()
+
+# 1) Pretty labels
+pretty_go <- function(x) {
+  x %>%
+    str_remove("^GOBP_") %>%         # drop prefix
+    str_replace_all("_", " ") %>%    # underscores -> spaces
+    str_to_sentence() %>%            # Title-ish case
+    str_replace_all("\\bAnd\\b", "and") %>%
+    str_replace_all("\\bOf\\b", "of") %>%
+    str_replace_all("\\bTo\\b", "to")
+}
+
+# 2) (Optional) collapse redundant GO terms per contrast
+collapse_if_wanted <- function(gsea_tbl, ranks, pathways, padj_cutoff = 0.05) {
+  keep_ids <- gsea_tbl %>% filter(padj <= padj_cutoff) %>% pull(pathway)
+  if (length(keep_ids) < 3) return(gsea_tbl)  # nothing to collapse
+  cp <- fgsea::collapsePathways(
+    pathways = pathways[keep_ids],
+    fgseaRes = gsea_tbl %>% filter(pathway %in% keep_ids),
+    stats    = ranks
+  )
+  gsea_tbl %>% filter(pathway %in% cp$mainPathways)
+}
+
+# --- Build per-contrast (optionally collapsed) results
+gsea_F_plot   <- collapse_if_wanted(gsea_F,   ranks_F_e,   msig_entrez)
+gsea_M_plot   <- collapse_if_wanted(gsea_M,   ranks_M_e,   msig_entrez)
+gsea_Int_plot <- collapse_if_wanted(gsea_Int, ranks_Int_e, msig_entrez)
+gsea_Bas_plot <- collapse_if_wanted(gsea_Bas, ranks_Bas_e, msig_entrez)
+
+gsea_all_plot <- bind_rows(gsea_F_plot, gsea_M_plot, gsea_Int_plot, gsea_Bas_plot)
+
+# 3) Choose top-k by FDR within each contrast and make pretty/wrapped labels
+top_k <- gsea_all_plot %>%
+  filter(!is.na(padj)) %>%
+  group_by(contrast) %>%
+  slice_min(padj, n = 10, with_ties = FALSE) %>%
+  ungroup() %>%
+  mutate(
+    label_raw = pretty_go(pathway),
+    label     = stringr::str_wrap(label_raw, width = 35)
+  ) %>%
+  group_by(contrast) %>%
+  arrange(padj, .by_group = TRUE) %>%
+  mutate(label = tidytext::reorder_within(label, NES, contrast)) %>%
+  ungroup()
+
+# 4) Plot (clean legend text + wrapped labels + per-facet ordering)
+ggplot(top_k, aes(x = label, y = NES, fill = NES > 0)) +
+  geom_col() +
+  coord_flip() +
+  facet_wrap(~ contrast, scales = "free_y") +
+  tidytext::scale_x_reordered() +
+  scale_fill_manual(
+    values = c("TRUE" = "firebrick", "FALSE" = "steelblue"),
+    name   = "Direction",
+    labels = c("FALSE" = "Enriched among genes lower in this contrast",
+               "TRUE"  = "Enriched among genes higher in this contrast")
+  ) +
+  labs(
+    title    = "Top GO:BP pathways per contrast",
+    subtitle = "Ordered by FDR (labels prettified; optional redundancy collapse)",
+    x = NULL, y = "Normalised Enrichment Score (NES)"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom")
+
+```
+
+
+
+
+## Mitch
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+
+
+```
+
+# Load data
+
+Reactome pathways were downloaded on the 11th January 2024.
+
+```{r,load1}
+
+gs <- msigdbr(species = "Mus musculus", category = "H") %>%
+  split(.$gene_symbol)
+length(gs)
+```
+
+# 
+
+```{r}
+
+tab_F <- as.data.frame(res_F_raw) %>%
+  rownames_to_column("ensgene") %>%
+  select(ensgene, F_AngII_vs_Saline = stat)
+
+tab_M <- as.data.frame(res_M_raw) %>%
+  rownames_to_column("ensgene") %>%
+  select(ensgene, M_AngII_vs_Saline = stat)
+
+tab_Int <- as.data.frame(res_int_raw) %>%
+  rownames_to_column("ensgene") %>%
+  select(ensgene, Interaction_M_minus_F = stat)
+
+tab_Bas <- as.data.frame(res_bsl_raw) %>%
+  rownames_to_column("ensgene") %>%
+  select(ensgene, Baseline_M_vs_F = stat)
+
+rna_stats <- tab_F %>%
+  full_join(tab_M,  by = "ensgene") %>%
+  full_join(tab_Int, by = "ensgene") %>%
+  full_join(tab_Bas, by = "ensgene") %>%
+  # drop genes with no stats at all
+  filter(if_any(-ensgene, ~ !is.na(.)))
+
+
+geneTable <- ann %>%
+  rename(symbol = gene) %>%
+  select(symbol, ensgene)
+
+```
+
+
+# Mitch import
+
+Mitch_import will be used to measure the differential gene methylation expression scores for the genes obtained from the pan_tissue for the relationship of interest.  
+
+```{r,mg1_adipose}
+
+# turn scores into a matrix with rownames = ensgene
+rna_mat <- rna_stats %>%
+  mutate(ensgene = sub("\\.\\d+$", "", ensgene)) %>%
+  column_to_rownames("ensgene")
+
+tic()
+m_rna <- mitch_import(
+  x         = rna_mat,
+  DEtype    = "prescored",
+  geneTable = geneTable
+)
+toc()
+str(m_rna)
+
+
+mres_rna <- mitch_calc(
+  x          = m_rna,
+  genesets   = gs,
+  minsetsize = 10,
+  cores      = 8,
+  priority   = "effect")
+
+
+# hTML
+mitch_report(mres_rna, "/mnt/vol1/Mouse_model_RNA_Seq/rna_mitch_report.html")
+
+```
+
+
+## Up and down regulated pathways
+
+In here, I will be finding the up and down regulated pathways
+
+```{r, Graphical representation of the differential methylated pathways-pan_tissue}
+
+mtab <- mres_rna$enrichment_result
+
+# keep sig pathways
+sig_tab <- mtab %>%
+  filter(p.adjustANOVA < 0.05, setSize >= 10) %>%
+  arrange(p.adjustANOVA, desc(s.dist)) %>%
+  distinct(set, .keep_all = TRUE)
+
+# top 10 by s.dist
+top10 <- sig_tab %>%
+  arrange(desc(s.dist)) %>%
+  slice_head(n = 10)
+
+# tidy names
+top10 <- top10 %>%
+  mutate(
+    pretty = gsub("^HALLMARK_", "", set),
+    pretty = gsub("_", " ", pretty),
+    direction = ifelse(s.dist >= 0, "Up in contrast", "Down in contrast"))
+
+```
+
+
+## Graphical representation of the differential methylated pathways
+
+```{r,plot,fig.width=12, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+ggplot(top10, aes(x = s.dist, y = reorder(pretty, s.dist), fill = direction)) +
+  geom_col() +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_fill_manual(values = c("Up in contrast" = "firebrick", "Down in contrast" = "steelblue")) +
+  labs(
+    title = "Top enriched pathways (mitch)",
+    x = "mitch enrichment score (s.dist)",
+    y = NULL
+  ) +
+  theme_minimal(base_size = 12)
+
+```
+
+
+```{r,plot,fig.width=12, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+
+```
+
+
+```{r,plot,fig.width=12, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+
+```
 
 
 ```
@@ -668,6 +920,8 @@ ggplot(top_k, aes(x = path, y = NES, fill = NES > 0)) +
 
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+sessionInfo()
 
 ```
 
