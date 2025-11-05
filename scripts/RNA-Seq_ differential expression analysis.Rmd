@@ -744,87 +744,206 @@ ggplot(top_k, aes(x = id, y = NES, fill = NES > 0)) +
 ## Mitch
 
 
-```{r,load1}
-gs_hallmark_mm <- msigdbr(
+```{r,plot,fig.width=12, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+deseq_to_prescore <- function(res_obj) {
+  as.data.frame(res_obj) %>%
+    rownames_to_column("ensgene") %>%
+    mutate(ensgene = sub("\\.\\d+$", "", ensgene)) %>%
+    filter(!is.na(stat)) %>%
+    dplyr::select(ensgene, score = stat) %>%
+    group_by(ensgene) %>%
+    slice_max(order_by = abs(score), n = 1) %>%
+    ungroup() %>%
+    column_to_rownames("ensgene")
+}
+
+x_F   <- deseq_to_prescore(res_F_raw)
+x_M   <- deseq_to_prescore(res_M_raw)
+x_Int <- deseq_to_prescore(res_int_raw)
+x_Bas <- deseq_to_prescore(res_bsl_raw)
+
+## 2. geneTable from your GTF annotation ---------------------------
+geneTable <- ann %>%
+  filter(!is.na(symbol), symbol != "") %>%
+  dplyr::select(gene = symbol, ensgene)
+
+## 3. msigdbr gene sets in SYMBOL space ----------------------------
+# Hallmark
+msig_hall <- msigdbr(
   species  = "Mus musculus",
   category = "H"
 ) %>%
-  dplyr::distinct(gs_name, gene_symbol) %>%
-  split(.$gene_symbol, .$gs_name)
+  dplyr::select(gs_name, gene_symbol) %>%
+  distinct() %>%
+  group_by(gs_name) %>%
+  summarise(genes = list(gene_symbol), .groups = "drop") %>%
+  tibble::deframe()
 
-length(gs_hallmark_mm)
+# GO:BP
+msig_gobp <- msigdbr(
+  species     = "Mus musculus",
+  category    = "C5",
+  subcategory = "GO:BP"
+) %>%
+  dplyr::select(gs_name, gene_symbol) %>%
+  distinct() %>%
+  group_by(gs_name) %>%
+  summarise(genes = list(gene_symbol), .groups = "drop") %>%
+  tibble::deframe()
 
+## 4. function to run mitch for one contrast + one geneset --------
+run_mitch_one <- function(x_mat, genesets, label) {
+  mobj <- mitch_import(
+    x         = x_mat,
+    DEtype    = "prescored",
+    geneTable = geneTable
+  )
+  mres <- mitch_calc(
+    x          = mobj,
+    genesets   = genesets,
+    minsetsize = 5,
+    cores      = CORES,
+    priority   = "effect"
+  )
+  # add contrast label for later binding
+  out <- mres$enrichment_result %>%
+    mutate(
+      contrast = label,
+      set_clean = gsub("_", " ", gsub("^HALLMARK_|^GOBP_", "", set))
+    )
+  return(out)
+}
+
+## 5. run for all 4 contrasts, Hallmark ----------------------------
+hall_F   <- run_mitch_one(x_F,   msig_hall, "F Ang-II vs Saline")
+hall_M   <- run_mitch_one(x_M,   msig_hall, "M Ang-II vs Saline")
+hall_Int <- run_mitch_one(x_Int, msig_hall, "Interaction (M vs F)")
+hall_Bas <- run_mitch_one(x_Bas, msig_hall, "Baseline M vs F")
+
+hall_all <- bind_rows(hall_F, hall_M, hall_Int, hall_Bas)
+
+# keep sig + top 10 per contrast
+hall_top10 <- hall_all %>%
+  filter(!is.na(p.adjustANOVA), p.adjustANOVA < 0.05, setSize >= 5) %>%
+  arrange(contrast, p.adjustANOVA, desc(abs(s.dist))) %>%
+  group_by(contrast) %>%
+  slice_head(n = 10) %>%
+  ungroup()
+
+hall_top10
+
+## 6. run for all 4 contrasts, GO:BP -------------------------------
+gobp_F   <- run_mitch_one(x_F,   msig_gobp, "F Ang-II vs Saline")
+gobp_M   <- run_mitch_one(x_M,   msig_gobp, "M Ang-II vs Saline")
+gobp_Int <- run_mitch_one(x_Int, msig_gobp, "Interaction (M vs F)")
+gobp_Bas <- run_mitch_one(x_Bas, msig_gobp, "Baseline M vs F")
+
+gobp_all <- bind_rows(gobp_F, gobp_M, gobp_Int, gobp_Bas)
+
+gobp_top10 <- gobp_all %>%
+  filter(!is.na(p.adjustANOVA), p.adjustANOVA < 0.05, setSize >= 5) %>%
+  arrange(contrast, p.adjustANOVA, desc(abs(s.dist))) %>%
+  group_by(contrast) %>%
+  slice_head(n = 10) %>%
+  ungroup()
+
+gobp_top10
 ```
-
-# Extract the zscors and the gene names for each of the contrasts
-
-```{r}
-
-tab_F <- as.data.frame(res_F_raw) %>%
-  rownames_to_column("ensgene") %>%
-  dplyr::select(ensgene, F_AngII_vs_Saline = stat)
-
-tab_M <- as.data.frame(res_M_raw) %>%
-  rownames_to_column("ensgene") %>%
-  dplyr::select(ensgene, M_AngII_vs_Saline = stat)
-
-tab_Int <- as.data.frame(res_int_raw) %>%
-  rownames_to_column("ensgene") %>%
-  dplyr::select(ensgene, Interaction_M_minus_F = stat)
-
-tab_Bas <- as.data.frame(res_bsl_raw) %>%
-  rownames_to_column("ensgene") %>%
-  dplyr::select(ensgene, Baseline_M_vs_F = stat)
-
-rna_stats <- tab_F %>%
-  full_join(tab_M,  by = "ensgene") %>%
-  full_join(tab_Int, by = "ensgene") %>%
-  full_join(tab_Bas, by = "ensgene") %>%
-  filter(if_any(-ensgene, ~ !is.na(.)))
-
-geneTable <- ann %>%
-  dplyr::select(symbol, ensgene)
-
-```
-
-
-
-
-```{r,mg1_adipose}
-
-
-```
-
-```{r, Graphical representation of the differential methylated pathways-pan_tissue}
-
-
-```
-
-
 
 
 ```{r,plot,fig.width=12, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+# make sure contrast order is nice
+hall_top10$contrast <- factor(
+  hall_top10$contrast,
+  levels = c(
+    "F Ang-II vs Saline",
+    "M Ang-II vs Saline",
+    "Interaction (M vs F)",
+    "Baseline M vs F"
+  )
+)
+
+ggplot(hall_top10,
+       aes(x = reorder(set_clean, s.dist), y = s.dist, fill = s.dist > 0)) +
+  geom_col() +
+  coord_flip() +
+  facet_wrap(~ contrast, scales = "free_y") +
+  scale_fill_manual(
+    values = c("TRUE" = "firebrick", "FALSE" = "steelblue"),
+    name   = "Direction",
+    labels = c("FALSE" = "↓ in this contrast", "TRUE" = "↑ in this contrast")
+  ) +
+  labs(
+    title = "mitch – Hallmark pathways (top 10 per contrast)",
+    x = NULL,
+    y = "mitch s.dist"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold")
+  )
+
+#
+
+
+gobp_top10$contrast <- factor(
+  gobp_top10$contrast,
+  levels = c(
+    "F Ang-II vs Saline",
+    "M Ang-II vs Saline",
+    "Interaction (M vs F)",
+    "Baseline M vs F"
+  )
+)
+
+ggplot(gobp_top10,
+       aes(x = reorder(set_clean, s.dist), y = s.dist, fill = s.dist > 0)) +
+  geom_col() +
+  coord_flip() +
+  facet_wrap(~ contrast, scales = "free_y") +
+  scale_fill_manual(
+    values = c("TRUE" = "firebrick", "FALSE" = "steelblue"),
+    name   = "Direction",
+    labels = c("FALSE" = "↓ in this contrast", "TRUE" = "↑ in this contrast")
+  ) +
+  labs(
+    title = "mitch – GO:BP pathways (top 10 per contrast)",
+    x = NULL,
+    y = "mitch s.dist"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold")
+  )
+
+
 
 ```
 
 
-```{r,plot,fig.width=12, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-
-
-```
-
-
-```{r,plot,fig.width=12, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+```{r echo=TRUE, fig.height=9, message=FALSE, warning=FALSE}
 
 
 
 ```
+
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+
+```
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
 
 ```
 
 
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
 
 ```
 
