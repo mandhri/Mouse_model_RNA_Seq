@@ -739,8 +739,6 @@ ggplot(top_k, aes(x = id, y = NES, fill = NES > 0)) +
 ```
 
 
-
-
 ## Mitch
 
 
@@ -848,11 +846,14 @@ gobp_top10 <- gobp_all %>%
   ungroup()
 
 gobp_top10
+
 ```
 
 
 ```{r,plot,fig.width=12, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-# make sure contrast order is nice
+
+# Hallmark pathways
+
 hall_top10$contrast <- factor(
   hall_top10$contrast,
   levels = c(
@@ -871,7 +872,7 @@ ggplot(hall_top10,
   scale_fill_manual(
     values = c("TRUE" = "firebrick", "FALSE" = "steelblue"),
     name   = "Direction",
-    labels = c("FALSE" = "↓ in this contrast", "TRUE" = "↑ in this contrast")
+    labels = c("FALSE" = "Enriched among genes lower in this contrast", "TRUE" = "Enriched among genes higher in this contrast")
   ) +
   labs(
     title = "mitch – Hallmark pathways (top 10 per contrast)",
@@ -884,8 +885,7 @@ ggplot(hall_top10,
     strip.text = element_text(face = "bold")
   )
 
-#
-
+# GO:BP pathways
 
 gobp_top10$contrast <- factor(
   gobp_top10$contrast,
@@ -905,7 +905,7 @@ ggplot(gobp_top10,
   scale_fill_manual(
     values = c("TRUE" = "firebrick", "FALSE" = "steelblue"),
     name   = "Direction",
-    labels = c("FALSE" = "↓ in this contrast", "TRUE" = "↑ in this contrast")
+    labels = c("FALSE" = "Enriched among genes lower in this contrast", "TRUE" = "Enriched among genes higher in this contrast")
   ) +
   labs(
     title = "mitch – GO:BP pathways (top 10 per contrast)",
