@@ -584,36 +584,91 @@ gsea_all %>% group_by(contrast) %>% slice_head(n=10)
 
 
 
-length(ranks_F) 
-sum(duplicated(names(ranks_F)))
-summary(ranks_F)
+length(ranks_F_e)
+sum(duplicated(names(ranks_F_e)))
+summary(ranks_F_e)
 
 ```
 
 
 
-```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-top_k <- gsea_all %>%
-  group_by(contrast) %>%
-  slice_min(padj, n = 10) %>%
-  ungroup() %>%
-  mutate(path = gsub("^HALLMARK_", "", pathway),
-         path = factor(path, levels = rev(unique(path))))
+Context:
 
-ggplot(top_k, aes(x = path, y = NES, fill = padj < 0.05)) +
+4 contrasts And their interpretation
+
+1. Baseline (M vs F)
+  This is Sex_M_vs_F, so its Male − Female
+  Red (NES > 0): pathway genes are more highly expressed in males than females.
+  Blue (NES < 0): pathway genes are lower in males, so higher in females.
+
+  
+2. F Ang-II vs Saline
+  This is Treatment_Ang.II_vs_Saline with F as baseline sex = (Ang-II females) − (Saline females)
+  Red: pathway enriched in Ang-II females (treatment turned it up).
+  Blue: pathway lower in Ang-II females,so relatively higher in Saline females.
+
+3.M Ang-II vs Saline
+  This IS the main + interaction = (Ang-II males) − (Saline males)
+  Red: pathway up in Ang-II males.
+  Blue: pathway down in Ang-II males = higher in Saline males.
+  
+4. Interaction (M & F)
+   This is SexM.TreatmentAng.II, which answers the question, “does Ang-II change this pathway more    in males than females?” (main effect of treatment is reference to females)
+   Red: Ang-II effect is stronger in males than in females.
+   Blue: Ang-II effect is stronger in females than in males
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+#sessionInfo()
+
+ # order by FDR so “most sig” is at the top
+top_k <- gsea_all %>%
+  filter(!is.na(padj)) %>%
+  group_by(contrast) %>%
+  slice_min(padj, n = 10) %>%         
+  ungroup() %>%
+  mutate(
+    path = gsub("^HALLMARK_", "", pathway)
+  ) %>%
+  group_by(contrast) %>%
+  arrange(padj, .by_group = TRUE) %>%
+  mutate(path = factor(path, levels = rev(path))) %>%
+  ungroup()
+
+ggplot(top_k, aes(x = path, y = NES, fill = NES > 0)) +
   geom_col() +
   coord_flip() +
   facet_wrap(~ contrast, scales = "free_y") +
-  scale_fill_manual(values = c("TRUE"="steelblue4","FALSE"="grey70"), name="FDR<0.05") +
-  labs(title="Hallmark GSEA (NES)", x=NULL, y="Normalised Enrichment Score") +
+  scale_fill_manual(
+    values = c("TRUE" = "firebrick", "FALSE" = "steelblue"),
+    name   = "Direction",
+    labels = c("FALSE" = "Enriched in down genes", "TRUE" = "Enriched in up genes")
+  ) +
+  labs(
+    title = "Top 10 Hallmark pathways per contrast",
+    x = NULL,
+    y = "Normalised Enrichment Score (NES)",
+    subtitle = "Ordered by FDR. Colour shows direction (NES)"
+  ) +
   theme_minimal(base_size = 11)
 
 ```
 
 
-
 ```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-sessionInfo()
+
 
 ```
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+```
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+```
+
+
 
