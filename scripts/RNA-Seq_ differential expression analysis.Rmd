@@ -749,7 +749,8 @@ gs_hallmark_mm <- msigdbr(
   species  = "Mus musculus",
   category = "H"
 ) %>%
-  split(.$gene_symbol)
+  dplyr::distinct(gs_name, gene_symbol) %>%
+  split(.$gene_symbol, .$gs_name)
 
 length(gs_hallmark_mm)
 
@@ -787,108 +788,22 @@ geneTable <- ann %>%
 ```
 
 
-# Mitch import
 
 
 ```{r,mg1_adipose}
 
-geneTable <- ann %>%
-  dplyr::select(symbol, ensgene)
-
-
-rna_sym <- rna_stats %>%
-  dplyr::mutate(ensgene = sub("\\.\\d+$", "", ensgene)) %>%
-  dplyr::left_join(geneTable, by = "ensgene") %>%
-  dplyr::filter(!is.na(symbol)) %>%
-  dplyr::distinct(symbol, .keep_all = TRUE)
-
-vec_F   <- rna_sym$F_AngII_vs_Saline
-names(vec_F) <- rna_sym$symbol
-
-vec_M   <- rna_sym$M_AngII_vs_Saline
-names(vec_M) <- rna_sym$symbol
-
-vec_Int <- rna_sym$Interaction_M_minus_F
-names(vec_Int) <- rna_sym$symbol
-
-vec_Bas <- rna_sym$Baseline_M_vs_F
-names(vec_Bas) <- rna_sym$symbol
-
-scores_list <- list(
-  F_AngII_vs_Saline     = vec_F,
-  M_AngII_vs_Saline     = vec_M,
-  Interaction_M_minus_F = vec_Int,
-  Baseline_M_vs_F       = vec_Bas
-)
-
-
-mk_ps <- function(mat, col) {
-  data.frame(
-    gene = rownames(mat),
-    stat = as.numeric(mat[, col]),
-    stringsAsFactors = FALSE
-  )
-}
-
-scores_list <- list(
-  F_AngII_vs_Saline     = mk_ps(rna_sym, "F_AngII_vs_Saline"),
-  M_AngII_vs_Saline     = mk_ps(rna_sym, "M_AngII_vs_Saline"),
-  Interaction_M_minus_F = mk_ps(rna_sym, "Interaction_M_minus_F"),
-  Baseline_M_vs_F       = mk_ps(rna_sym, "Baseline_M_vs_F")
-)
-
-
-head(scores_list$F_AngII_vs_Saline)
-
-# hTML
-mitch_report(mres_rna, "/mnt/vol1/Mouse_model_RNA_Seq/rna_mitch_report.html")
 
 ```
-
-
-## Up and down regulated pathways
-
-In here, I will be finding the up and down regulated pathways
 
 ```{r, Graphical representation of the differential methylated pathways-pan_tissue}
 
-mtab <- mres_rna$enrichment_result
-
-# keep sig pathways
-sig_tab <- mtab %>%
-  filter(p.adjustANOVA < 0.05, setSize >= 10) %>%
-  arrange(p.adjustANOVA, desc(s.dist)) %>%
-  distinct(set, .keep_all = TRUE)
-
-# top 10 by s.dist
-top10 <- sig_tab %>%
-  arrange(desc(s.dist)) %>%
-  slice_head(n = 10)
-
-# tidy names
-top10 <- top10 %>%
-  mutate(
-    pretty = gsub("^HALLMARK_", "", set),
-    pretty = gsub("_", " ", pretty),
-    direction = ifelse(s.dist >= 0, "Up in contrast", "Down in contrast"))
 
 ```
 
 
-## Graphical representation of the differential methylated pathways
+
 
 ```{r,plot,fig.width=12, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-
-ggplot(top10, aes(x = s.dist, y = reorder(pretty, s.dist), fill = direction)) +
-  geom_col() +
-  geom_vline(xintercept = 0, linetype = "dashed") +
-  scale_fill_manual(values = c("Up in contrast" = "firebrick", "Down in contrast" = "steelblue")) +
-  labs(
-    title = "Top enriched pathways (mitch)",
-    x = "mitch enrichment score (s.dist)",
-    y = NULL
-  ) +
-  theme_minimal(base_size = 12)
 
 ```
 
