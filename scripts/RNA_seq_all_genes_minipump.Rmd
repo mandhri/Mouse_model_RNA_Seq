@@ -37,8 +37,7 @@ library("metafor")
 library("ggplot2")
 library("purrr")
 library("metafor")
-  library("AnnotationDbi")
-
+library("AnnotationDbi")
 library("readxl")
 library("ggplot2")
 library("tidyverse")
@@ -172,12 +171,12 @@ I variance-stabilised the counts and used them to check sample structure. First,
 
 vsd<- vst(dds, blind = TRUE)
 
-ann<- as.data.frame(colData(dds))[, c("Sex","Treatment"), drop = FALSE]
+ann_col<- as.data.frame(colData(dds))[, c("Sex","Treatment"), drop = FALSE]
 
 #sample–sample correlation heatmap
 pheatmap(cor(assay(vsd)),
-         annotation_col = ann,
-         annotation_row = ann) 
+         annotation_col = ann_col ,
+         annotation_row = ann_col) 
 
 # PCA (colour = Treatment, shape = sex)
 plotPCA(vsd, intgroup = c("Treatment","Sex"))
@@ -444,17 +443,41 @@ hist(res_int_raw$log2FoldChange, breaks=80)
 Heatmaps were made to show the genes with the strongest evidence of differential expression in each contrast. Raw log2 fold changes were used for the heatmap in this section.  
 For every contrast, all the genes were taken, variance-stabilised counts were scaled per gene, and samples were labelled by Sex and Treatment.
 
-```{r heatmap_raw, fig.width=13, fig.height=11, message=FALSE, warning=FALSE, echo=TRUE}
+```{r heatmap_raw, echo=TRUE, fig.height=11, fig.width=13, message=FALSE, warning=FALSE}
 
-top_heatmap<- function(res_raw, vsd, label) {
-  keep<- order(res_raw$padj, na.last = NA)[1:min(sum(!is.na(res_raw$padj)))]
-  genes<- rownames(res_raw)[keep]
-  mat<- assay(vsd)[genes, , drop=FALSE]
-  mat<- scale(t(scale(t(mat))))  
-  ann<- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop=FALSE]
-  pheatmap(mat, annotation_col = ann, show_rownames = TRUE,
-           main = paste0(" DE genes: ", label))
+top_heatmap <- function(res_tbl, vsd, label,
+                        zcap = 3, show_rownames = FALSE,
+                        cluster_rows = TRUE, cluster_cols = TRUE,
+                        fontsize_row = 6) {
+  keep  <- order(res_tbl$padj, na.last = NA)
+  genes <- intersect(rownames(res_tbl)[keep], rownames(vsd))
+  mat <- assay(vsd)[genes, , drop = FALSE]
+  mat <- scale(t(scale(t(mat))))
+  mat[mat >  zcap] <-  zcap
+  mat[mat < -zcap] <- -zcap
+  ann_col <- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop = FALSE]
+  pheatmap::pheatmap(
+    mat,
+    annotation_col = ann_col,
+    show_rownames  = show_rownames,
+    cluster_rows   = cluster_rows,
+    cluster_cols   = cluster_cols,
+    main = paste0("All genes: ", label)
+  )
 }
+
+# Annotation
+gtf<- file.path(idx, "Mus_musculus.GRCm39.115.gtf")
+gtf_df<- as.data.frame(rtracklayer::import(gtf))
+
+# For symbols
+ann<- gtf_df %>%
+  filter(type == "gene") %>%
+  transmute(
+    ensgene = sub("\\.\\d+$", "", gene_id),
+    symbol  = gene_name) %>%
+  distinct()
+
 
 top_heatmap(res_F_raw, vsd, "F Ang-II vs Saline")
 top_heatmap(res_M_raw, vsd, "M Ang-II vs Saline")
@@ -473,7 +496,7 @@ save_full <- function(res, ann, file){
 }
 
 
-save_full(res_F_raw, ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_F_AngII_vs_Saline_full.csv")
+save_full(res_F_raw, ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_F_AngII_vs_Saline_raw.csv")
 save_full(res_M_raw, ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_M_vs_Saline_raw.csv")
 save_full(res_int_raw, ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_Interaction_raw.csv")
 save_full(res_bsl_raw, ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_Baseline_raw.csv")
@@ -485,12 +508,7 @@ save_full(res_bsl_raw, ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Resu
 
 Here the same idea is used, but only genes with FDR <= 0.05 are kept first, and then up to 40 of those are plotted. Some contrasts had fewer than 40 genes at FDR <= 0.05, so the heatmap shows all available significant genes for those contrasts.
 
-```{r het_sig, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-
-
-top_heatmap(res_M_shr, vsd, "M Ang-II vs Saline")
-top_heatmap(res_int_shr, vsd, "Interaction (M & F)")
-top_heatmap(res_bsl_shr, vsd, "Baseline (M vs F, Saline)")
+```{r heat_sig, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
 # Female-only view of female contrast genes
 female_cols<- colData(vsd)$Sex == "F"
@@ -511,10 +529,11 @@ top_heatmap_sig<- function(res_shr, vsd, label, n=40, alpha=0.05){
   genes<- rownames(res_shr)[keep]
   mat<- assay(vsd)[genes, , drop=FALSE]
   mat<- scale(t(scale(t(mat))))
-  ann<- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop=FALSE]
-  pheatmap(mat, annotation_col=ann, show_rownames=TRUE,
+  ann_col <- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop = FALSE]
+  pheatmap(mat, annotation_col=ann_col, show_rownames=TRUE,
            main=sprintf("Top %d genes (FDR <= %.2g): %s", length(genes), alpha, label))
 }
+
 
 top_heatmap_sig(res_F_shr, vsd, "F Ang-II vs Saline")
 top_heatmap_sig(res_M_shr, vsd, "M Ang-II vs Saline")
@@ -535,33 +554,46 @@ top_heatmap_sig(res_M_shr, vsd[, male_cols], "M Ang-II vs Saline (male samples)"
 
 ### Heatmaps (all the genes)
 
-Heatmaps were made to show the genes with the strongest evidence of differential expression in each contrast. Shrunken log2 fold changes were used for the heatmap in this section. 
-For every contrast, all the genes were taken, variance-stabilised counts were scaled per gene, and samples were labelled by Sex and Treatment.
+Heatmaps use shrunken log2 fold changes for clearer, more stable effect sizes. For each contrast, all genes were included; variance-stabilised counts were z-scored per gene and samples annotated by Sex and Treatment.
 
-```{r heatmap_shr, fig.width=20, fig.height=20, message=FALSE, warning=FALSE, echo=TRUE}
+```{r heatmap_shr, fig.width=13, fig.height=11, message=FALSE, warning=FALSE, echo=TRUE}
 
-top_heatmap<- function(res_shr, vsd, label) {
-  keep<- order(res_shr$padj, na.last = NA)[1:min(sum(!is.na(res_shr$padj)))]
-  genes<- rownames(res_shr)[keep]
-  mat<- assay(vsd)[genes, , drop=FALSE]
-  mat<- scale(t(scale(t(mat))))  
-  ann<- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop=FALSE]
-  pheatmap(mat, annotation_col = ann, show_rownames = TRUE,
-           main = paste0(" DE genes: ", label))
+top_heatmap <- function(res_tbl, vsd, label,
+                        zcap = 3, show_rownames = FALSE,
+                        cluster_rows = TRUE, cluster_cols = TRUE,
+                        fontsize_row = 6) {
+  keep  <- order(res_tbl$padj, na.last = NA)
+  genes <- intersect(rownames(res_tbl)[keep], rownames(vsd))
+  mat <- assay(vsd)[genes, , drop = FALSE]
+  mat <- scale(t(scale(t(mat))))
+  mat[mat >  zcap] <-  zcap
+  mat[mat < -zcap] <- -zcap
+  ann_col <- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop = FALSE]
+  pheatmap::pheatmap(
+    mat,
+    annotation_col = ann_col,
+    show_rownames  = show_rownames,
+    cluster_rows   = cluster_rows,
+    cluster_cols   = cluster_cols,
+    main = paste0("All genes: ", label)
+  )
 }
 
 top_heatmap(res_F_shr, vsd, "F Ang-II vs Saline")
-
+top_heatmap(res_M_shr, vsd, "M Ang-II vs Saline")
+top_heatmap(res_int_shr, vsd, "Interaction (M & F)")
+top_heatmap(res_bsl_shr, vsd, "Baseline (M vs F, Saline)")
 
 save_full <- function(res, ann, file){
   as.data.frame(res)  %>%
     tibble::rownames_to_column("ensgene")  %>%
     dplyr::mutate(ensgene = sub("\\.\\d+$","", ensgene))  %>%
     dplyr::left_join(ann, by = "ensgene")  %>%
-    dplyr::select(symbol, ensgene, baseMean, log2FoldChange, lfcSE, stat, pvalue, padj)  %>%
+    dplyr::select(symbol, ensgene, baseMean, log2FoldChange, lfcSE, pvalue, padj)  %>%
     dplyr::arrange(padj)  %>%
     readr::write_csv(file)
 }
+
 
 save_full(res_F_shr,ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_F_vs_Saline_shrunk.csv")
 save_full(res_M_shr,ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_M_vs_Saline_shrunk.csv")
@@ -576,11 +608,6 @@ save_full(res_bsl_shr,ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Resul
 Here the same idea is used, but only genes with FDR <= 0.05 are kept first, and then up to 40 of those are plotted. Some contrasts had fewer than 40 genes at FDR <= 0.05, so the heatmap shows all available significant genes for those contrasts.
 
 ```{r het_sig_shr, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
-
-
-top_heatmap(res_M_shr, vsd, "M Ang-II vs Saline")
-top_heatmap(res_int_shr, vsd, "Interaction (M & F)")
-top_heatmap(res_bsl_shr, vsd, "Baseline (M vs F, Saline)")
 
 # Female-only view of female contrast genes
 female_cols<- colData(vsd)$Sex == "F"
@@ -601,10 +628,11 @@ top_heatmap_sig<- function(res_shr, vsd, label, n=40, alpha=0.05){
   genes<- rownames(res_shr)[keep]
   mat<- assay(vsd)[genes, , drop=FALSE]
   mat<- scale(t(scale(t(mat))))
-  ann<- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop=FALSE]
-  pheatmap(mat, annotation_col=ann, show_rownames=TRUE,
+  ann_col<- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop=FALSE]
+  pheatmap(mat, annotation_col=ann_col, show_rownames=TRUE,
            main=sprintf("Top %d genes (FDR <= %.2g): %s", length(genes), alpha, label))
 }
+
 
 top_heatmap_sig(res_F_shr, vsd, "F Ang-II vs Saline")
 top_heatmap_sig(res_M_shr, vsd, "M Ang-II vs Saline")
@@ -620,7 +648,6 @@ male_cols<- colData(vsd)$Sex == "M"
 top_heatmap_sig(res_M_shr, vsd[, male_cols], "M Ang-II vs Saline (male samples)")
 
 ```
-
 
 
 # Pathway enrichment Analysis
@@ -653,20 +680,6 @@ top_heatmap_sig(res_M_shr, vsd[, male_cols], "M Ang-II vs Saline (male samples)"
 MSigDB “Hallmarks” (collection H) = 50 core biological with minimal overlap gene sets that capture broad, well-defined biological processes. 
 
 ```{r message=FALSE, warning=FALSE, echo=TRUE}
-
-# Map Ensembl to gene symbols 
-gtf<- file.path(idx, "Mus_musculus.GRCm39.115.gtf")
-gtf_df<- as.data.frame(rtracklayer::import(gtf))
-
-# For symbols
-ann<- gtf_df %>%
-  filter(type == "gene") %>%
-  transmute(
-    ensgene = sub("\\.\\d+$", "", gene_id),
-    symbol  = gene_name) %>%
-  distinct()
-
-head(ann)
 
 # map ensembl to entrez
 map_ensg_to_entrez<- function(ens_ids){
@@ -718,7 +731,18 @@ gsea_Int<- run_gsea(ranks_Int_e, "Interaction (M & F)", msig_entrez)
 gsea_Bas<- run_gsea(ranks_Bas_e, "Baseline (M vs F)", msig_entrez)
 gsea_all<- bind_rows(gsea_F, gsea_M, gsea_Int, gsea_Bas)
 
+
+readr::write_csv(dplyr::arrange(gsea_F,  padj, pval) %>% dplyr::select(-leadingEdge),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/fgsea_hallmark_full_F_vs_Saline.csv")
+readr::write_csv(dplyr::arrange(gsea_M,  padj, pval) %>% dplyr::select(-leadingEdge),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/fgsea_hallmark_full_M_vs_Saline.csv")
+readr::write_csv(dplyr::arrange(gsea_Int,padj, pval) %>% dplyr::select(-leadingEdge),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/fgsea_hallmark_full_Interaction.csv")
+readr::write_csv(dplyr::arrange(gsea_Bas,padj, pval) %>% dplyr::select(-leadingEdge),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/fgsea_hallmark_full_Baseline.csv")
+
 ```
+
 
 ### Top significant GSEA (Hallmarks) pathways
 
@@ -769,7 +793,7 @@ GO:BP (MSigDB C5, Biological Process) contains a larger set of more specific, on
 
 ```{r message=FALSE, warning=FALSE, echo=TRUE}
 
-# GO: BP pathways (msigdbr), grouped by gs_name
+# GO:BP pathways (msigdbr), grouped by gs_name
 msig_entrez<- msigdbr(species="Mus musculus", category="C5", subcategory = "GO:BP")%>%
   distinct(gs_name, entrez_gene) %>%
   group_by(gs_name) %>%
@@ -786,9 +810,22 @@ run_gsea<- function(ranks, label, pathways) {
 
 gsea_F<- run_gsea(ranks_F_e, "F Ang-II vs Saline", msig_entrez)
 gsea_M<- run_gsea(ranks_M_e, "M Ang-II vs Saline", msig_entrez)
-gsea_Int<- run_gsea(ranks_Int_e, "Interaction (M & F)",  msig_entrez)
-gsea_Bas<- run_gsea(ranks_Bas_e, "Baseline (M vs F)",  msig_entrez)
+gsea_Int<- run_gsea(ranks_Int_e, "Interaction (M & F)", msig_entrez)
+gsea_Bas<- run_gsea(ranks_Bas_e, "Baseline (M vs F)", msig_entrez)
 gsea_all<- bind_rows(gsea_F, gsea_M, gsea_Int, gsea_Bas)
+
+
+
+readr::write_csv(dplyr::arrange(gsea_F,  padj, pval) %>% dplyr::select(-leadingEdge),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/fgsea_GO_BP_full_F_vs_Saline.csv")
+readr::write_csv(dplyr::arrange(gsea_M,  padj, pval) %>% dplyr::select(-leadingEdge),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/fgsea_GO_BP_full_M_vs_Saline.csv")
+readr::write_csv(dplyr::arrange(gsea_Int,padj, pval) %>% dplyr::select(-leadingEdge),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/fgsea_GO_BP_full_Interaction.csv")
+readr::write_csv(dplyr::arrange(gsea_Bas,padj, pval) %>% dplyr::select(-leadingEdge),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/fgsea_GO_BP_full_Baseline.csv")
+
+
 
 ```
 
@@ -904,6 +941,11 @@ hall_Bas<- run_mitch_one(x_Bas, msig_hall, "Baseline M vs F")
 
 hall_all<- bind_rows(hall_F, hall_M, hall_Int, hall_Bas)
 
+readr::write_csv(dplyr::arrange(hall_all, p.adjustANOVA, pANOVA),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/mitch_hallmark_full_all_contrasts.csv")
+
+
+
 #sig + top 10 per contrast
 hall_top10<- hall_all %>%
   filter(!is.na(p.adjustANOVA), p.adjustANOVA < 0.05, setSize >= 5) %>%
@@ -921,6 +963,9 @@ gobp_Int<- run_mitch_one(x_Int, msig_gobp, "Interaction (M vs F)")
 gobp_Bas<- run_mitch_one(x_Bas, msig_gobp, "Baseline M vs F")
 
 gobp_all<- bind_rows(gobp_F, gobp_M, gobp_Int, gobp_Bas)
+
+readr::write_csv(dplyr::arrange(gobp_all,  p.adjustANOVA, pANOVA),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/mitch_gobp_full_all_contrasts.csv")
 
 gobp_top10<- gobp_all %>%
   filter(!is.na(p.adjustANOVA), p.adjustANOVA < 0.05, setSize >= 5) %>%
