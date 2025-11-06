@@ -436,16 +436,19 @@ hist(res_int_raw$log2FoldChange, breaks=80)
 
 # Heatmaps of all the genes per contrast 
 
-## Heatmaps (top genes by FDR)
 
-Heatmaps were made to show the genes with the strongest evidence of differential expression in each contrast.  
+## Heatmaps (Raw logFC)
+
+### Heatmaps (all the genes)
+
+Heatmaps were made to show the genes with the strongest evidence of differential expression in each contrast. Raw log2 fold changes were used for the heatmap in this section.  
 For every contrast, all the genes were taken, variance-stabilised counts were scaled per gene, and samples were labelled by Sex and Treatment.
 
-```{r heatmap, fig.width=20, fig.height=20, message=FALSE, warning=FALSE, echo=TRUE}
+```{r heatmap_raw, fig.width=13, fig.height=11, message=FALSE, warning=FALSE, echo=TRUE}
 
-top_heatmap<- function(res_shr, vsd, label) {
-  keep<- order(res_shr$padj, na.last = NA)[1:min(sum(!is.na(res_shr$padj)))]
-  genes<- rownames(res_shr)[keep]
+top_heatmap<- function(res_raw, vsd, label) {
+  keep<- order(res_raw$padj, na.last = NA)[1:min(sum(!is.na(res_raw$padj)))]
+  genes<- rownames(res_raw)[keep]
   mat<- assay(vsd)[genes, , drop=FALSE]
   mat<- scale(t(scale(t(mat))))  
   ann<- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop=FALSE]
@@ -453,11 +456,32 @@ top_heatmap<- function(res_shr, vsd, label) {
            main = paste0(" DE genes: ", label))
 }
 
-top_heatmap(res_F_shr, vsd, "F Ang-II vs Saline")
+top_heatmap(res_F_raw, vsd, "F Ang-II vs Saline")
+top_heatmap(res_M_raw, vsd, "M Ang-II vs Saline")
+top_heatmap(res_int_raw, vsd, "Interaction (M & F)")
+top_heatmap(res_bsl_raw, vsd, "Baseline (M vs F, Saline)")
+
+
+save_full <- function(res, ann, file){
+  as.data.frame(res)  %>%
+    tibble::rownames_to_column("ensgene")  %>%
+    dplyr::mutate(ensgene = sub("\\.\\d+$","", ensgene))  %>%
+    dplyr::left_join(ann, by = "ensgene")  %>%
+    dplyr::select(symbol, ensgene, baseMean, log2FoldChange, lfcSE, stat, pvalue, padj)  %>%
+    dplyr::arrange(padj)  %>%
+    readr::write_csv(file)
+}
+
+
+save_full(res_F_raw, ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_F_AngII_vs_Saline_full.csv")
+save_full(res_M_raw, ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_M_vs_Saline_raw.csv")
+save_full(res_int_raw, ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_Interaction_raw.csv")
+save_full(res_bsl_raw, ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_Baseline_raw.csv")
 
 ```
 
-## Heatmaps of significant genes only
+
+### Heatmaps (significant genes only)
 
 Here the same idea is used, but only genes with FDR <= 0.05 are kept first, and then up to 40 of those are plotted. Some contrasts had fewer than 40 genes at FDR <= 0.05, so the heatmap shows all available significant genes for those contrasts.
 
@@ -475,8 +499,6 @@ top_heatmap(res_F_shr, vsd[, female_cols], "F Ang-II vs Saline (female samples)"
 # Male-only view of male contrast genes
 male_cols<- colData(vsd)$Sex == "M"
 top_heatmap(res_M_shr, vsd[, male_cols], "M Ang-II vs Saline (male samples)")
-
-
 
 
 top_heatmap_sig<- function(res_shr, vsd, label, n=40, alpha=0.05){
@@ -508,6 +530,97 @@ male_cols<- colData(vsd)$Sex == "M"
 top_heatmap_sig(res_M_shr, vsd[, male_cols], "M Ang-II vs Saline (male samples)")
 
 ```
+
+## Heatmaps (Shrunken)
+
+### Heatmaps (all the genes)
+
+Heatmaps were made to show the genes with the strongest evidence of differential expression in each contrast. Shrunken log2 fold changes were used for the heatmap in this section. 
+For every contrast, all the genes were taken, variance-stabilised counts were scaled per gene, and samples were labelled by Sex and Treatment.
+
+```{r heatmap_shr, fig.width=20, fig.height=20, message=FALSE, warning=FALSE, echo=TRUE}
+
+top_heatmap<- function(res_shr, vsd, label) {
+  keep<- order(res_shr$padj, na.last = NA)[1:min(sum(!is.na(res_shr$padj)))]
+  genes<- rownames(res_shr)[keep]
+  mat<- assay(vsd)[genes, , drop=FALSE]
+  mat<- scale(t(scale(t(mat))))  
+  ann<- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop=FALSE]
+  pheatmap(mat, annotation_col = ann, show_rownames = TRUE,
+           main = paste0(" DE genes: ", label))
+}
+
+top_heatmap(res_F_shr, vsd, "F Ang-II vs Saline")
+
+
+save_full <- function(res, ann, file){
+  as.data.frame(res)  %>%
+    tibble::rownames_to_column("ensgene")  %>%
+    dplyr::mutate(ensgene = sub("\\.\\d+$","", ensgene))  %>%
+    dplyr::left_join(ann, by = "ensgene")  %>%
+    dplyr::select(symbol, ensgene, baseMean, log2FoldChange, lfcSE, stat, pvalue, padj)  %>%
+    dplyr::arrange(padj)  %>%
+    readr::write_csv(file)
+}
+
+save_full(res_F_shr,ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_F_vs_Saline_shrunk.csv")
+save_full(res_M_shr,ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_M_vs_Saline_shrunk.csv")
+save_full(res_int_shr,ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_Interaction_shrunk.csv")
+save_full(res_bsl_shr,ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_Baseline_shrunk.csv")
+
+```
+
+
+### Heatmaps (significant genes only)
+
+Here the same idea is used, but only genes with FDR <= 0.05 are kept first, and then up to 40 of those are plotted. Some contrasts had fewer than 40 genes at FDR <= 0.05, so the heatmap shows all available significant genes for those contrasts.
+
+```{r het_sig_shr, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+
+top_heatmap(res_M_shr, vsd, "M Ang-II vs Saline")
+top_heatmap(res_int_shr, vsd, "Interaction (M & F)")
+top_heatmap(res_bsl_shr, vsd, "Baseline (M vs F, Saline)")
+
+# Female-only view of female contrast genes
+female_cols<- colData(vsd)$Sex == "F"
+top_heatmap(res_F_shr, vsd[, female_cols], "F Ang-II vs Saline (female samples)")
+
+# Male-only view of male contrast genes
+male_cols<- colData(vsd)$Sex == "M"
+top_heatmap(res_M_shr, vsd[, male_cols], "M Ang-II vs Saline (male samples)")
+
+
+top_heatmap_sig<- function(res_shr, vsd, label, n=40, alpha=0.05){
+  sig<- which(!is.na(res_shr$padj) & res_shr$padj <= alpha)
+  if (length(sig) == 0) {
+    message("No genes pass FDR <= ", alpha, " for: ", label)
+    return(invisible(NULL))
+  }
+  keep<- head(sig[order(res_shr$padj[sig])], n)
+  genes<- rownames(res_shr)[keep]
+  mat<- assay(vsd)[genes, , drop=FALSE]
+  mat<- scale(t(scale(t(mat))))
+  ann<- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop=FALSE]
+  pheatmap(mat, annotation_col=ann, show_rownames=TRUE,
+           main=sprintf("Top %d genes (FDR <= %.2g): %s", length(genes), alpha, label))
+}
+
+top_heatmap_sig(res_F_shr, vsd, "F Ang-II vs Saline")
+top_heatmap_sig(res_M_shr, vsd, "M Ang-II vs Saline")
+top_heatmap_sig(res_bsl_shr, vsd, "Baseline (M vs F, Saline)")
+sum(res_int_shr$padj <= 0.05, na.rm=TRUE)
+
+# Female-only view of female contrast genes
+female_cols<- colData(vsd)$Sex == "F"
+top_heatmap_sig(res_F_shr, vsd[, female_cols], "F Ang-II vs Saline (female samples)")
+
+# Male-only view of male contrast genes
+male_cols<- colData(vsd)$Sex == "M"
+top_heatmap_sig(res_M_shr, vsd[, male_cols], "M Ang-II vs Saline (male samples)")
+
+```
+
 
 
 # Pathway enrichment Analysis
