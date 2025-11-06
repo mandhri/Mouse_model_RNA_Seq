@@ -442,14 +442,14 @@ For every contrast, all the genes were taken, variance-stabilised counts were sc
 
 ```{r heatmap, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
-top_heatmap<- function(res_shr, vsd, label) {
-  keep<- order(res_shr$padj, na.last = NA)[1:min(sum(!is.na(res_shr$padj)))]
+top_heatmap<- function(res_shr, vsd, label, n=40) {
+  keep<- order(res_shr$padj, na.last = NA)[1:min(n, sum(!is.na(res_shr$padj)))]
   genes<- rownames(res_shr)[keep]
   mat<- assay(vsd)[genes, , drop=FALSE]
   mat<- scale(t(scale(t(mat))))  
   ann<- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop=FALSE]
   pheatmap(mat, annotation_col = ann, show_rownames = TRUE,
-           main = paste0(" DE genes: ", label))
+           main = paste0("Top ", n, " DE genes: ", label))
 }
 
 top_heatmap(res_F_shr, vsd, "F Ang-II vs Saline")
@@ -499,6 +499,7 @@ top_heatmap_sig(res_F_shr, vsd[, female_cols], "F Ang-II vs Saline (female sampl
 # Male-only view of male contrast genes
 male_cols<- colData(vsd)$Sex == "M"
 top_heatmap_sig(res_M_shr, vsd[, male_cols], "M Ang-II vs Saline (male samples)")
+
 
 ```
 
