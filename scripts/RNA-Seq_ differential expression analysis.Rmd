@@ -80,7 +80,7 @@ old_align<-read_csv("/mnt/vol1/Mouse_model_RNA_Seq/kallisto_results/aligment_no_
 
 new_df<- align%>% mutate(index = "cDNA + ncRNA", rate = 100 * pseudoaligned/processed) %>%
  select(sample, index, rate)
-old_df <- old_align %>% mutate(index = "cDNA only",                               rate = 100 * pseudoaligned/processed) %>%
+old_df <- old_align %>% mutate(index = "cDNA only", rate = 100 * pseudoaligned/processed) %>%
   select(sample, index, rate)
 
 df<- bind_rows(new_df, old_df)
@@ -433,23 +433,23 @@ hist(res_int_raw$log2FoldChange, breaks=80)
 
 ```
 
-# Heatmaps of top 40 genes per contrast 
+# Heatmaps of all the genes per contrast 
 
 ## Heatmaps (top genes by FDR)
 
 Heatmaps were made to show the genes with the strongest evidence of differential expression in each contrast.  
-For every contrast, the 40 genes with the smallest FDR were taken, variance-stabilised counts were scaled per gene, and samples were labelled by Sex and Treatment.
+For every contrast, all the genes were taken, variance-stabilised counts were scaled per gene, and samples were labelled by Sex and Treatment.
 
 ```{r heatmap, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
 
-top_heatmap<- function(res_shr, vsd, label, n=40) {
-  keep<- order(res_shr$padj, na.last = NA)[1:min(n, sum(!is.na(res_shr$padj)))]
+top_heatmap<- function(res_shr, vsd, label) {
+  keep<- order(res_shr$padj, na.last = NA)[1:min(sum(!is.na(res_shr$padj)))]
   genes<- rownames(res_shr)[keep]
   mat<- assay(vsd)[genes, , drop=FALSE]
   mat<- scale(t(scale(t(mat))))  
   ann<- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop=FALSE]
   pheatmap(mat, annotation_col = ann, show_rownames = TRUE,
-           main = paste0("Top ", n, " DE genes: ", label))
+           main = paste0(" DE genes: ", label))
 }
 
 top_heatmap(res_F_shr, vsd, "F Ang-II vs Saline")
@@ -513,13 +513,12 @@ top_heatmap_sig(res_M_shr, vsd[, male_cols], "M Ang-II vs Saline (male samples)"
   - Blue (NES < 0): pathway genes are lower in males, so higher in females.
 
 2. **F Ang-II vs Saline**  
-  This is Treatment_Ang.II_vs_Saline with F as baseline sex = (Ang-II females) −   
-  (Saline females)
+  This is Treatment_Ang.II_vs_Saline with F as baseline sex = (Ang-II females) − (Saline females)
   - **Red:** pathway enriched in Ang-II–treated females.  
   - **Blue:** pathway lower after Ang-II in females (relatively higher in saline females).
 
-3.**M Ang-II vs Saline**
-  This IS the main + interaction = (Ang-II males) − (Saline males)
+3. **M Ang-II vs Saline**
+  This IS the main + interaction = (Ang-II males) − (Saline males).
   - **Red:** pathway up in Ang-II males.  
   - **Blue:** pathway down in Ang-II males (i.e. higher in saline males).
   
