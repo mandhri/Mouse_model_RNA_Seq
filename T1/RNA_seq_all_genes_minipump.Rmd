@@ -1,0 +1,1050 @@
+---
+title: "RNA-Seq_differential_expression_analysis"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+    fig_width: 10
+    fig_height: 8
+  pdf_document:
+    toc: yes
+theme: cosmo
+date: "2025-10-18"
+---
+
+```{r,packages}
+
+
+suppressPackageStartupMessages({
+library("EnhancedVolcano")
+library("limma")
+library("biomaRt")
+library("annotables")
+library("tximport")
+library("apeglm")
+library("eulerr")
+library("DESeq2")
+library("HGNChelper")
+library("tictoc")
+library("DESeq2")
+library("kableExtra")
+library("beeswarm")
+library("missMethyl")
+library("gridExtra")
+library("png")
+library("metafor")
+library("ggplot2")
+library("purrr")
+library("metafor")
+library("AnnotationDbi")
+library("readxl")
+library("ggplot2")
+library("tidyverse")
+library("magrittr")
+library("readr")
+library("eulerr")
+library("RColorBrewer")
+library("e1071")
+library("plotly") 
+library("pheatmap")
+library("msigdbr")
+library("mitch")
+  library("rtracklayer")
+  library("dplyr")
+  library("org.Mm.eg.db")
+  library("fgsea")
+  
+})
+
+CORES=16
+
+```
+
+# Sample manifest and alignment summary
+
+I ran two kallisto alignments for each sample : one against the cDNA-only index and one against the cDNA + ncRNA index and compared the pseudoalignment rates. The runs using the cDNA + ncRNA index consistently showed higher alignment percentages, so I selected this index for all downstream analyses.
+
+```{r alignment, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+base<- "/mnt/vol1/Mouse_model_RNA_Seq/kallisto_results_plus_ncRNA/"
+idx<- "/mnt/vol1/Mouse_model_RNA_Seq/index"
+
+samples<- read_tsv(file.path(base,"samples.txt"),col_names = "sample", show_col_types = FALSE)
+samples$path <- file.path(base, samples$sample, "abundance.tsv")
+
+align<- read_delim("/mnt/vol1/Mouse_model_RNA_Seq/kallisto_results_plus_ncRNA/alignment_summary.tsv")
+
+old_align<-read_csv("/mnt/vol1/Mouse_model_RNA_Seq/kallisto_results/aligment_no_ncrna.csv", show_col_types = FALSE)
+
+new_df<- align%>% mutate(index = "cDNA + ncRNA", rate = 100 * pseudoaligned/processed) %>%
+ select(sample, index, rate)
+old_df <- old_align %>% mutate(index = "cDNA only", rate = 100 * pseudoaligned/processed) %>%
+  select(sample, index, rate)
+
+df<- bind_rows(new_df, old_df)
+
+
+delta<- df %>% pivot_wider(names_from = index, values_from = rate) %>%
+  mutate(delta = `cDNA + ncRNA` - `cDNA only`) %>%
+  arrange(delta)
+df$sample <- factor(df$sample, levels = delta$sample)
+
+ggplot(df, aes(sample, rate, fill = index)) +
+  geom_col(position = position_dodge(width = 0.75), width = 0.7) +
+  labs(title = "Pseudoalignment rate by sample",
+       x = "Sample", y = "Rate (%)", fill = "Run") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+```
+
+# Import transcripts to gene level via trimport package
+
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+
+tx2gene<- read.csv(file.path("/mnt/vol1/Mouse_model_RNA_Seq/tx2gene_r115.csv"), stringsAsFactors = FALSE)
+stopifnot(all(c("TXNAME","GENEID") %in% names(tx2gene)))
+
+files<- file.path(base, samples$sample, "abundance.tsv")
+names(files) <- samples$sample
+stopifnot(all(file.exists(files)))
+
+txi<- tximport(files,
+                type = "kallisto",
+                tx2gene = tx2gene[, c("TXNAME","GENEID")],
+                countsFromAbundance = "lengthScaledTPM",
+                ignoreTxVersion = TRUE)
+
+txi$counts[1:2, 1:6] 
+
+```
+
+# Reading meta data that comes with the samples
+
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+
+pheno<- read_excel("/mnt/vol1/Mouse_model_RNA_Seq/minipump.xlsx",skip =1 )
+colnames(pheno)
+
+coldata<- pheno %>%
+  filter(Sample %in% samples$sample) %>%
+  arrange(match(Sample, samples$sample)) %>%
+  mutate(
+    Sex = factor(Sex, levels = c("F","M")), # F as baseline
+    Treatment = factor(Intervention, levels = c("Saline","Ang-II"))) # saline as baseline
+
+rownames(coldata)<- coldata$Sample
+
+```
+
+# Making DESeqDataSet from tximport
+
+I made a DESeq2 object from the imported counts, added the sample info, and set the design to use sex, treatment, and their interaction.
+
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+
+dds<- DESeqDataSetFromTximport(txi, colData = coldata, design = ~ Sex + Treatment + Sex:Treatment)
+
+```
+
+# Filtering for low count and normalisation of the counts
+
+I first removed genes with very low total counts across samples (sum < 10), then I estimated size factors in DESeq2 to account for library size differences, and extracted the normalised counts for inspection.
+
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+
+keep<- rowSums(counts(dds)) >= 10
+dds<- dds[keep, ]
+
+dds<- estimateSizeFactors(dds)
+norm_counts<- counts(dds, normalized = TRUE)
+glimpse(norm_counts)
+
+```
+
+# Unsupervised clustering analyses
+
+I variance-stabilised the counts and used them to check sample structure. First, I plotted a sample–sample correlation heatmap (annotated by sex and treatment) to spot outliers. Then I ran a PCA, colouring by treatment and shaping by sex, to see if groups separate. After that, I set the baselines (F, Saline) and fit the DESeq2 model with the interaction.
+
+```{r PCA, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+vsd<- vst(dds, blind = TRUE)
+
+ann_col<- as.data.frame(colData(dds))[, c("Sex","Treatment"), drop = FALSE]
+
+#sample–sample correlation heatmap
+pheatmap(cor(assay(vsd)),
+         annotation_col = ann_col ,
+         annotation_row = ann_col) 
+
+# PCA (colour = Treatment, shape = sex)
+plotPCA(vsd, intgroup = c("Treatment","Sex"))
+
+## Fit model (set baselines)
+dds$Sex<- relevel(factor(dds$Sex), "F")
+dds$Treatment<- relevel(factor(dds$Treatment), "Saline")
+design(dds)<- ~ Sex + Treatment + Sex:Treatment
+dds<- DESeq(dds)
+
+```
+
+
+
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+
+resultsNames(dds)
+
+# baseline (saline): M vs F
+coef_sex<- "Sex_M_vs_F"   
+
+# Ang-II vs Saline in females (F is baseline sex)
+coef_trt<- "Treatment_Ang.II_vs_Saline"  
+
+# (Ang-II effect in M) & (Ang-II effect in F)
+coef_int<- "SexM.TreatmentAng.II"        
+
+```
+
+#  RAW results vs Shrinking the log2 fold changes
+
+## With LFC filtering
+
+DESeq2 results were obtained for the four contrasts, and log2 fold changes were then shrunk (ashr) to reduce noise from low-count genes. The results were combined and plotted as volcano-style panels to compare raw vs shrunken effects, highlighting genes with FDR <= 0.05 and LFC >= 0.5.
+
+```{r shrunken, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+### RAW results ###
+
+# 1. Within each Sex
+# 1.1 Female: Ang-II vs Saline  
+res_F_raw<- results(dds, name = coef_trt)
+# 1.2 Male: Ang-II vs Saline  
+res_M_raw<- results(dds, contrast = list(c(coef_trt, coef_int)))
+
+# 2. Effect of Ang-II treatment between sex
+res_int_raw<- results(dds, name = coef_int)
+
+# 3. Baseline (saline): M vs F
+res_bsl_raw<- results(dds, name = coef_sex)
+
+# Shrinkage results
+res_F_shr<- lfcShrink(dds, coef = coef_trt, type = "ashr")
+res_M_shr<- lfcShrink(dds, contrast= list(c(coef_trt, coef_int)), type = "ashr")
+res_int_shr<- lfcShrink(dds, coef = coef_int, type = "ashr")
+res_bsl_shr<- lfcShrink(dds, coef = coef_sex, type = "ashr")
+
+make_df<- function(raw, shr, label){
+  data.frame(
+    gene = rownames(raw),
+    lfc_raw= raw$log2FoldChange,
+    lfc_shr = shr$log2FoldChange,
+    FDR_raw = raw$padj,           
+    contrast = label,
+    stringsAsFactors = FALSE)
+}
+
+res_all<- bind_rows(
+  make_df(res_F_raw, res_F_shr, "Female: Ang-II vs Saline"),
+  make_df(res_M_raw, res_M_shr, "Male: Ang-II vs Saline"),
+  make_df(res_int_raw, res_int_shr,"Interaction: (M & F) treatment effect"),
+  make_df(res_bsl_raw, res_bsl_shr, "Baseline (Saline): M vs F")
+) 
+
+# Raw vs Shrunken
+res_long<- res_all %>%
+  mutate(
+    hit_raw= !is.na(FDR_raw) & FDR_raw<= 0.05 & abs(lfc_raw)>= 0.5,
+    hit_shr= !is.na(FDR_raw) & FDR_raw<= 0.05 & abs(lfc_shr)>= 0.5
+  ) %>%
+  dplyr::select(gene, contrast, FDR_raw, lfc_raw, lfc_shr, hit_raw, hit_shr) %>%
+  tidyr::pivot_longer(
+    cols = c(lfc_raw, lfc_shr, hit_raw, hit_shr),
+    names_to= c(".value", "lfc_type"),
+    names_sep= "_"              
+  ) %>%
+  mutate(
+    lfc_type = dplyr::recode(lfc_type,
+      raw = "Raw LFC",
+      shr = "Shrunken LFC"),
+    lfc_type = factor(lfc_type, levels = c("Raw LFC", "Shrunken LFC")),
+    contrast = factor(
+      contrast,
+      levels = c(
+        "Female: Ang-II vs Saline",
+        "Male: Ang-II vs Saline",
+        "Interaction: (M & F) treatment effect",
+        "Baseline (Saline): M vs F"
+      )
+    )
+  )
+
+
+x_max<- quantile(abs(res_long$lfc), 0.995, na.rm = TRUE)
+x_lim<- c(-max(1.5, x_max), max(1.5, x_max))
+y_max<- quantile(-log10(res_long$FDR_raw), 0.995, na.rm = TRUE)
+y_lim<- c(0, max(5, y_max))
+
+ggplot(res_long, aes(lfc, -log10(FDR_raw), colour = hit)) +
+  geom_point(alpha = 0.6, size = 1.2) +
+  geom_vline(xintercept = c(-0.5, 0.5), linetype = 2) +
+  geom_hline(yintercept = -log10(0.05), linetype = 2) +
+  coord_cartesian(xlim = x_lim, ylim = y_lim) +
+  facet_grid(contrast ~ lfc_type, switch = "y") +
+  scale_colour_manual(values = c("FALSE" = "grey60", "TRUE" = "steelblue4"),
+                      labels = c("FALSE" = "FDR>0.05 or LFC<0.5", "TRUE" = "FDR<=0.05 &  LFC>=0.5"),name = NULL) +
+  labs(
+    title = "Volcano comparison: Raw vs Shrunken (ashr) with LFC filtering",
+    x = "log2 fold change",
+    y = expression(-log[10]("FDR from unshrunken"))) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    strip.placement = "outside",
+    strip.background = element_blank(),
+    strip.text.x = element_text(face = "bold"),
+    strip.text.y.left = element_text(angle = 0, face = "bold"),
+    panel.grid.minor = element_blank())
+
+
+```
+
+## Without LFC filtering
+
+The same raw vs shrunken comparison was repeated but without applying a fold-change cutoff.
+
+```{r raw, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+# Raw vs Shrunken
+res_long_nolfc<- res_all %>%
+  mutate(
+    sig_raw = !is.na(FDR_raw) & FDR_raw <= 0.05,
+    sig_shr = !is.na(FDR_raw) & FDR_raw <= 0.05
+  ) %>%
+  dplyr::select(gene, contrast, FDR_raw, lfc_raw, lfc_shr, sig_raw, sig_shr) %>%
+  tidyr::pivot_longer(
+    cols= c(lfc_raw, lfc_shr, sig_raw, sig_shr),
+    names_to= c(".value", "lfc_type"),
+    names_sep= "_") %>%
+  mutate(
+    lfc_type = recode(lfc_type,
+      raw = "Raw LFC (before)",
+      shr = "Shrunken LFC (after)"),
+    lfc_type = factor(lfc_type, levels = c("Raw LFC (before)", "Shrunken LFC (after)")),
+    contrast= factor(contrast, levels = c(
+      "Female: Ang-II vs Saline",
+      "Male: Ang-II vs Saline",
+      "Interaction: (M & F) treatment effect",
+      "Baseline (Saline): M vs F"
+    )))
+
+x_max<- quantile(abs(res_long_nolfc$lfc), 0.995, na.rm = TRUE)
+x_lim<- c(-max(1.5, x_max), max(1.5, x_max))
+y_max<- quantile(-log10(res_long_nolfc$FDR_raw), 0.995, na.rm = TRUE)
+y_lim<- c(0, max(5, y_max))
+
+ggplot(res_long_nolfc, aes(lfc, -log10(FDR_raw), colour = sig)) +
+  geom_point(alpha = 0.6, size = 1.2) +
+  geom_hline(yintercept = -log10(0.05), linetype = 2) +
+  coord_cartesian(xlim = x_lim, ylim = y_lim) +
+  facet_grid(contrast ~ lfc_type, switch = "y") +
+  scale_colour_manual(
+    values = c("FALSE" = "grey60", "TRUE" = "steelblue4"),
+    labels = c("FALSE" = "FDR > 0.05", "TRUE" = "FDR ≤ 0.05"),
+    name = NULL) +
+  labs(
+    title = "Volcano comparison: Raw vs Shrunken (ashr) without LFC filtering",
+    x = "log2 fold change",
+    y = expression(-log[10]("FDR (from unshrunken fit)"))) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    strip.placement = "outside",
+    strip.background = element_blank(),
+    strip.text.x = element_text(face = "bold"),
+    strip.text.y.left = element_text(angle = 0, face = "bold"),
+    panel.grid.minor = element_blank())
+
+```
+
+## Diagnostics
+
+This section checks whether the treatment effect really differs between males and females.
+
+SexM.TreatmentAng.II (the interaction) = [(Ang-II – Saline) in males] – [(Ang-II – Saline) in females]
+
+The interaction term (SexM.TreatmentAng.II) in the DESeq2 model is a difference-in-differences term. If this coefficient is close to 0 for most genes, it means Ang-II changes gene expression by about the same amount in males and females. In that case, each sex can still have treatment-responsive genes, but the extra difference between sexes is small.
+
+To test this formally, a likelihood ratio test (LRT) was run.
+The LRT is comparing the full model to the reduced model to identify significant genes. 
+
+Full model: ~ Sex + Treatment + Sex:Treatment
+
+Reduced model: ~ Sex + Treatment
+
+The p-values are determined solely by the difference in deviance between the ‘full’ and ‘reduced’ model formula (not log2 fold changes). Essentially the LRT test is testing whether the term(s) removed in the ‘reduced’ model explains a significant amount of variation in the data. Quoted: https://hbctraining.github.io/DGE_workshop/lessons/08_DGE_LRT.html
+
+
+Results:
+
+So in the case, where females are baseline/ reference;
+* β_int > 0: Ang-II effect is larger in males than females.
+
+* β_int < 0: Ang-II effect is smaller in males (or larger in females).
+
+Results of the preliminary states that;
+
+* Group sizes: F (4 Ang-II, 3 Saline), M (4 Ang-II, 6 Saline) = unbalanced and  small
+
+* F vs M LFC scatter: The Pearson correlation between male and female treatment LFCs was small (r ~ 0.056). Because the vast majority of genes have LFCs close to zero, this low correlation is likely could be die to the many near-zero values rather than by strong, opposing effects.
+
+* Summary of the full model (with interaction) to the reduced model (without interaction) gene-by-gene, shows ~0–4 genes at FDR <0.1 (and 0–1 at FDR < 0.05) out of 41594 genes. Hence it could be stated that the interaction term adds almost no explanatory power overall. 
+
+* Effect-size difference (M & F) distribution of median −0.023, centred near 0, further proving that Ang-II effect size is similar in males and females overall.
+
+* The histogram of LFC shows that the values of the res_F_raw and res_M_raw is centred around zero(median −0.023), indicating that Ang-II effects are broadly similar between sexes, consistent with the likelihood-ratio test showing negligible evidence for an interaction
+
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+
+# No.of saline and treatment samples of each sex
+table(pheno$Sex, pheno$Intervention)
+
+# correlation of the interaction 
+summary(res_F_raw$lfcSE)
+summary(res_M_raw$lfcSE)
+cor.test(res_F_raw$log2FoldChange, res_M_raw$log2FoldChange, use="complete.obs")
+
+
+lfc_F<- res_F_raw$log2FoldChange         
+lfc_M<- res_M_raw$log2FoldChange       
+delta<- lfc_M - lfc_F   
+summary(delta)
+
+# Model without interaction term (Hypothesis testing: Likelihood ratio test (LRT))
+dds_lrt<- DESeq(dds, test = "LRT", reduced = ~ Sex + Treatment)
+lrt<- results(dds_lrt)   
+summary(lrt)
+
+lrt05<- results(dds_lrt, alpha = 0.05)
+summary(lrt05) 
+
+# Distribution of M & F interaction LFC
+hist(res_int_raw$log2FoldChange, breaks=80)
+
+```
+
+# Heatmaps of all the genes per contrast 
+
+
+## Heatmaps (Raw logFC)
+
+### Heatmaps (all the genes)
+
+Heatmaps were made to show the genes with the strongest evidence of differential expression in each contrast. Raw log2 fold changes were used for the heatmap in this section.  
+For every contrast, all the genes were taken, variance-stabilised counts were scaled per gene, and samples were labelled by Sex and Treatment.
+
+```{r heatmap_raw, echo=TRUE, fig.height=11, fig.width=13, message=FALSE, warning=FALSE}
+
+top_heatmap <- function(res_tbl, vsd, label,
+                        zcap = 3, show_rownames = FALSE,
+                        cluster_rows = TRUE, cluster_cols = TRUE,
+                        fontsize_row = 6) {
+  keep  <- order(res_tbl$padj, na.last = NA)
+  genes <- intersect(rownames(res_tbl)[keep], rownames(vsd))
+  mat <- assay(vsd)[genes, , drop = FALSE]
+  mat <- scale(t(scale(t(mat))))
+  mat[mat >  zcap] <-  zcap
+  mat[mat < -zcap] <- -zcap
+  ann_col <- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop = FALSE]
+  pheatmap::pheatmap(
+    mat,
+    annotation_col = ann_col,
+    show_rownames  = show_rownames,
+    cluster_rows   = cluster_rows,
+    cluster_cols   = cluster_cols,
+    main = paste0("All genes: ", label)
+  )
+}
+
+# Annotation
+gtf<- file.path(idx, "Mus_musculus.GRCm39.115.gtf")
+gtf_df<- as.data.frame(rtracklayer::import(gtf))
+
+# For symbols
+ann<- gtf_df %>%
+  filter(type == "gene") %>%
+  transmute(
+    ensgene = sub("\\.\\d+$", "", gene_id),
+    symbol  = gene_name) %>%
+  distinct()
+
+
+top_heatmap(res_F_raw, vsd, "F Ang-II vs Saline")
+top_heatmap(res_M_raw, vsd, "M Ang-II vs Saline")
+top_heatmap(res_int_raw, vsd, "Interaction (M & F)")
+top_heatmap(res_bsl_raw, vsd, "Baseline (M vs F, Saline)")
+
+
+save_full <- function(res, ann, file){
+  as.data.frame(res)  %>%
+    tibble::rownames_to_column("ensgene")  %>%
+    dplyr::mutate(ensgene = sub("\\.\\d+$","", ensgene))  %>%
+    dplyr::left_join(ann, by = "ensgene")  %>%
+    dplyr::select(symbol, ensgene, baseMean, log2FoldChange, lfcSE, stat, pvalue, padj)  %>%
+    dplyr::arrange(padj)  %>%
+    readr::write_csv(file)
+}
+
+
+save_full(res_F_raw, ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_F_AngII_vs_Saline_raw.csv")
+save_full(res_M_raw, ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_M_vs_Saline_raw.csv")
+save_full(res_int_raw, ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_Interaction_raw.csv")
+save_full(res_bsl_raw, ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_Baseline_raw.csv")
+
+```
+
+
+### Heatmaps (significant genes only)
+
+Here the same idea is used, but only genes with FDR <= 0.05 are kept first, and then up to 40 of those are plotted. Some contrasts had fewer than 40 genes at FDR <= 0.05, so the heatmap shows all available significant genes for those contrasts.
+
+```{r heat_sig, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+# Female-only view of female contrast genes
+female_cols<- colData(vsd)$Sex == "F"
+top_heatmap(res_F_shr, vsd[, female_cols], "F Ang-II vs Saline (female samples)")
+
+# Male-only view of male contrast genes
+male_cols<- colData(vsd)$Sex == "M"
+top_heatmap(res_M_shr, vsd[, male_cols], "M Ang-II vs Saline (male samples)")
+
+
+top_heatmap_sig<- function(res_shr, vsd, label, n=40, alpha=0.05){
+  sig<- which(!is.na(res_shr$padj) & res_shr$padj <= alpha)
+  if (length(sig) == 0) {
+    message("No genes pass FDR <= ", alpha, " for: ", label)
+    return(invisible(NULL))
+  }
+  keep<- head(sig[order(res_shr$padj[sig])], n)
+  genes<- rownames(res_shr)[keep]
+  mat<- assay(vsd)[genes, , drop=FALSE]
+  mat<- scale(t(scale(t(mat))))
+  ann_col <- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop = FALSE]
+  pheatmap(mat, annotation_col=ann_col, show_rownames=TRUE,
+           main=sprintf("Top %d genes (FDR <= %.2g): %s", length(genes), alpha, label))
+}
+
+
+top_heatmap_sig(res_F_shr, vsd, "F Ang-II vs Saline")
+top_heatmap_sig(res_M_shr, vsd, "M Ang-II vs Saline")
+top_heatmap_sig(res_bsl_shr, vsd, "Baseline (M vs F, Saline)")
+sum(res_int_shr$padj <= 0.05, na.rm=TRUE)
+
+# Female-only view of female contrast genes
+female_cols<- colData(vsd)$Sex == "F"
+top_heatmap_sig(res_F_shr, vsd[, female_cols], "F Ang-II vs Saline (female samples)")
+
+# Male-only view of male contrast genes
+male_cols<- colData(vsd)$Sex == "M"
+top_heatmap_sig(res_M_shr, vsd[, male_cols], "M Ang-II vs Saline (male samples)")
+
+```
+
+## Heatmaps (Shrunken)
+
+### Heatmaps (all the genes)
+
+Heatmaps use shrunken log2 fold changes for clearer, more stable effect sizes. For each contrast, all genes were included; variance-stabilised counts were z-scored per gene and samples annotated by Sex and Treatment.
+
+```{r heatmap_shr, fig.width=13, fig.height=11, message=FALSE, warning=FALSE, echo=TRUE}
+
+top_heatmap <- function(res_tbl, vsd, label,
+                        zcap = 3, show_rownames = FALSE,
+                        cluster_rows = TRUE, cluster_cols = TRUE,
+                        fontsize_row = 6) {
+  keep  <- order(res_tbl$padj, na.last = NA)
+  genes <- intersect(rownames(res_tbl)[keep], rownames(vsd))
+  mat <- assay(vsd)[genes, , drop = FALSE]
+  mat <- scale(t(scale(t(mat))))
+  mat[mat >  zcap] <-  zcap
+  mat[mat < -zcap] <- -zcap
+  ann_col <- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop = FALSE]
+  pheatmap::pheatmap(
+    mat,
+    annotation_col = ann_col,
+    show_rownames  = show_rownames,
+    cluster_rows   = cluster_rows,
+    cluster_cols   = cluster_cols,
+    main = paste0("All genes: ", label)
+  )
+}
+
+top_heatmap(res_F_shr, vsd, "F Ang-II vs Saline")
+top_heatmap(res_M_shr, vsd, "M Ang-II vs Saline")
+top_heatmap(res_int_shr, vsd, "Interaction (M & F)")
+top_heatmap(res_bsl_shr, vsd, "Baseline (M vs F, Saline)")
+
+save_full <- function(res, ann, file){
+  as.data.frame(res)  %>%
+    tibble::rownames_to_column("ensgene")  %>%
+    dplyr::mutate(ensgene = sub("\\.\\d+$","", ensgene))  %>%
+    dplyr::left_join(ann, by = "ensgene")  %>%
+    dplyr::select(symbol, ensgene, baseMean, log2FoldChange, lfcSE, pvalue, padj)  %>%
+    dplyr::arrange(padj)  %>%
+    readr::write_csv(file)
+}
+
+
+save_full(res_F_shr,ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_F_vs_Saline_shrunk.csv")
+save_full(res_M_shr,ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_M_vs_Saline_shrunk.csv")
+save_full(res_int_shr,ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_Interaction_shrunk.csv")
+save_full(res_bsl_shr,ann, "/mnt/vol1/Mouse_model_RNA_Seq/Contrast_heatmap_Results/DESeq2_Baseline_shrunk.csv")
+
+```
+
+
+### Heatmaps (significant genes only)
+
+Here the same idea is used, but only genes with FDR <= 0.05 are kept first, and then up to 40 of those are plotted. Some contrasts had fewer than 40 genes at FDR <= 0.05, so the heatmap shows all available significant genes for those contrasts.
+
+```{r het_sig_shr, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+# Female-only view of female contrast genes
+female_cols<- colData(vsd)$Sex == "F"
+top_heatmap(res_F_shr, vsd[, female_cols], "F Ang-II vs Saline (female samples)")
+
+# Male-only view of male contrast genes
+male_cols<- colData(vsd)$Sex == "M"
+top_heatmap(res_M_shr, vsd[, male_cols], "M Ang-II vs Saline (male samples)")
+
+
+top_heatmap_sig<- function(res_shr, vsd, label, n=40, alpha=0.05){
+  sig<- which(!is.na(res_shr$padj) & res_shr$padj <= alpha)
+  if (length(sig) == 0) {
+    message("No genes pass FDR <= ", alpha, " for: ", label)
+    return(invisible(NULL))
+  }
+  keep<- head(sig[order(res_shr$padj[sig])], n)
+  genes<- rownames(res_shr)[keep]
+  mat<- assay(vsd)[genes, , drop=FALSE]
+  mat<- scale(t(scale(t(mat))))
+  ann_col<- as.data.frame(colData(vsd))[, c("Sex","Treatment"), drop=FALSE]
+  pheatmap(mat, annotation_col=ann_col, show_rownames=TRUE,
+           main=sprintf("Top %d genes (FDR <= %.2g): %s", length(genes), alpha, label))
+}
+
+
+top_heatmap_sig(res_F_shr, vsd, "F Ang-II vs Saline")
+top_heatmap_sig(res_M_shr, vsd, "M Ang-II vs Saline")
+top_heatmap_sig(res_bsl_shr, vsd, "Baseline (M vs F, Saline)")
+sum(res_int_shr$padj <= 0.05, na.rm=TRUE)
+
+# Female-only view of female contrast genes
+female_cols<- colData(vsd)$Sex == "F"
+top_heatmap_sig(res_F_shr, vsd[, female_cols], "F Ang-II vs Saline (female samples)")
+
+# Male-only view of male contrast genes
+male_cols<- colData(vsd)$Sex == "M"
+top_heatmap_sig(res_M_shr, vsd[, male_cols], "M Ang-II vs Saline (male samples)")
+
+```
+
+
+# Pathway enrichment Analysis
+
+**Context: interpretation of the four contrasts**
+
+1. **Baseline (M vs F)**  
+  This is Sex_M_vs_F, so its Male − Female
+  - Red (NES > 0): pathway genes are more highly expressed in males than females.
+  - Blue (NES < 0): pathway genes are lower in males, so higher in females.
+
+2. **F Ang-II vs Saline**  
+  This is Treatment_Ang.II_vs_Saline with F as baseline sex = (Ang-II females) − (Saline females)
+  - **Red:** pathway enriched in Ang-II–treated females.  
+  - **Blue:** pathway lower after Ang-II in females (relatively higher in saline females).
+
+3. **M Ang-II vs Saline**
+  This IS the main + interaction = (Ang-II males) − (Saline males).
+  - **Red:** pathway up in Ang-II males.  
+  - **Blue:** pathway down in Ang-II males (i.e. higher in saline males).
+  
+4. **Interaction (M × F)** 
+   This is SexM.TreatmentAng.II, which states whether "Ang-II changes the pathway more in  
+   males than in females (females are the reference for the treatment effect)".
+  - **Red:** Ang-II effect is stronger in males than in females.  
+  - **Blue:** Ang-II effect is stronger in females than in males.
+
+## GSEA (Hallmarks)
+
+MSigDB “Hallmarks” (collection H) = 50 core biological with minimal overlap gene sets that capture broad, well-defined biological processes. 
+
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+
+# map ensembl to entrez
+map_ensg_to_entrez<- function(ens_ids){
+  ens_ids <- sub("\\.\\d+$","", ens_ids)
+  tibble(ENSEMBL = ens_ids) %>%
+    mutate(ENTREZID = AnnotationDbi::mapIds(
+      org.Mm.eg.db, keys = ENSEMBL, keytype = "ENSEMBL",
+      column = "ENTREZID", multiVals = "first")) %>%
+    filter(!is.na(ENTREZID)) %>% distinct()
+}
+
+# rank vectors on entrez 
+rankify_entrez<- function(res_raw, ann_map){
+  df<- as.data.frame(res_raw) %>%
+    rownames_to_column("ensgene") %>%
+    mutate(ensgene = sub("\\.\\d+$","", ensgene)) %>%
+    left_join(ann_map, by = c("ensgene"="ENSEMBL")) %>%
+    filter(!is.na(stat), !is.na(ENTREZID))
+  split(df$stat, df$ENTREZID) %>% vapply(\(v) v[which.max(abs(v))], numeric(1))
+}
+
+ens_all<- unique(c(rownames(res_F_raw), rownames(res_M_raw),
+                       rownames(res_int_raw), rownames(res_bsl_raw)))
+ann_entrez<- map_ensg_to_entrez(ens_all)
+
+ranks_F_e<- rankify_entrez(res_F_raw, ann_entrez)
+ranks_M_e<- rankify_entrez(res_M_raw, ann_entrez)
+ranks_Int_e<- rankify_entrez(res_int_raw, ann_entrez)
+ranks_Bas_e<- rankify_entrez(res_bsl_raw, ann_entrez)
+
+# Hallmark pathways grouped by gs_name
+msig_entrez<- msigdbr(species="Mus musculus", category="H") %>%
+  distinct(gs_name, entrez_gene) %>%
+  group_by(gs_name) %>%
+  summarise(genes = list(unique(entrez_gene)), .groups = "drop") %>%
+  tibble::deframe()
+
+# overlap 
+ov_Fe<- sapply(msig_entrez, function(g) sum(names(ranks_F_e) %in% g)); summary(ov_Fe)
+
+# GSEA
+run_gsea<- function(ranks, label, pathways) {
+  fgsea::fgseaMultilevel(pathways = pathways, stats = ranks, minSize = 10, maxSize = 2000) %>% arrange(padj) %>% mutate(contrast = label)
+}
+
+gsea_F<- run_gsea(ranks_F_e, "F Ang-II vs Saline", msig_entrez)
+gsea_M<- run_gsea(ranks_M_e, "M Ang-II vs Saline", msig_entrez)
+gsea_Int<- run_gsea(ranks_Int_e, "Interaction (M & F)", msig_entrez)
+gsea_Bas<- run_gsea(ranks_Bas_e, "Baseline (M vs F)", msig_entrez)
+gsea_all<- bind_rows(gsea_F, gsea_M, gsea_Int, gsea_Bas)
+
+
+readr::write_csv(dplyr::arrange(gsea_F,  padj, pval) %>% dplyr::select(-leadingEdge),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/fgsea_hallmark_full_F_vs_Saline.csv")
+readr::write_csv(dplyr::arrange(gsea_M,  padj, pval) %>% dplyr::select(-leadingEdge),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/fgsea_hallmark_full_M_vs_Saline.csv")
+readr::write_csv(dplyr::arrange(gsea_Int,padj, pval) %>% dplyr::select(-leadingEdge),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/fgsea_hallmark_full_Interaction.csv")
+readr::write_csv(dplyr::arrange(gsea_Bas,padj, pval) %>% dplyr::select(-leadingEdge),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/fgsea_hallmark_full_Baseline.csv")
+
+```
+
+
+### Top significant GSEA (Hallmarks) pathways
+
+```{r Top_10_Hallmark, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+alpha<- 0.05
+
+top_k<- gsea_all %>%
+  dplyr::filter(!is.na(padj), padj <= alpha) %>%              
+  dplyr::group_by(contrast) %>%
+  dplyr::arrange(padj, dplyr::desc(abs(NES)), pathway, .by_group = TRUE) %>% 
+  dplyr::slice_head(n = 10) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(
+    path = gsub("^HALLMARK_", "", pathway),
+    path = gsub("_", " ", path),
+    id   = paste(contrast, path, sep = "|")                   
+  ) %>%
+  dplyr::group_by(contrast) %>%
+  dplyr::mutate(id = factor(id, levels = rev(unique(id)))) %>% 
+  dplyr::ungroup()
+
+wrap_lab<- function(x, width = 32) {
+  vapply(x, function(s) paste(strwrap(s, width = width), collapse = "\n"), character(1))
+}
+
+
+ggplot(top_k, aes(x = id, y = NES, fill = NES > 0)) +
+  geom_col() +coord_flip() +
+  facet_wrap(~ contrast, scales = "free_y") +
+  scale_x_discrete(labels = function(x) wrap_lab(sub("^[^|]*\\|", "", x), width = 32)) +
+  scale_fill_manual(
+    values = c("TRUE" = "firebrick", "FALSE" = "steelblue"),
+    name   = "Direction",
+    labels = c("FALSE" = "Enriched in genes lower in this contrast",
+               "TRUE"  = "Enriched in genes higher in this contrast")) +
+  labs(
+    title = sprintf("Top 10 Hallmark pathways per contrast (FDR <=0.05)", alpha),
+    x = NULL, y = "Normalised Enrichment Score (NES)") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom")
+
+```
+
+## GSEA (GO:BP)
+
+GO:BP (MSigDB C5, Biological Process) contains a larger set of more specific, ontology-based pathways that describe defined biological activities
+
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+
+# GO:BP pathways (msigdbr), grouped by gs_name
+msig_entrez<- msigdbr(species="Mus musculus", category="C5", subcategory = "GO:BP")%>%
+  distinct(gs_name, entrez_gene) %>%
+  group_by(gs_name) %>%
+  summarise(genes = list(unique(entrez_gene)), .groups = "drop") %>%
+  tibble::deframe()
+
+# overlap 
+ov_Fe<- sapply(msig_entrez, function(g) sum(names(ranks_F_e) %in% g)); summary(ov_Fe)
+
+# GSEA
+run_gsea<- function(ranks, label, pathways) {
+  fgsea::fgseaMultilevel(pathways = pathways, stats = ranks, minSize = 10, maxSize = 2000) %>% arrange(padj) %>% mutate(contrast = label)
+}
+
+gsea_F<- run_gsea(ranks_F_e, "F Ang-II vs Saline", msig_entrez)
+gsea_M<- run_gsea(ranks_M_e, "M Ang-II vs Saline", msig_entrez)
+gsea_Int<- run_gsea(ranks_Int_e, "Interaction (M & F)", msig_entrez)
+gsea_Bas<- run_gsea(ranks_Bas_e, "Baseline (M vs F)", msig_entrez)
+gsea_all<- bind_rows(gsea_F, gsea_M, gsea_Int, gsea_Bas)
+
+
+
+readr::write_csv(dplyr::arrange(gsea_F,  padj, pval) %>% dplyr::select(-leadingEdge),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/fgsea_GO_BP_full_F_vs_Saline.csv")
+readr::write_csv(dplyr::arrange(gsea_M,  padj, pval) %>% dplyr::select(-leadingEdge),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/fgsea_GO_BP_full_M_vs_Saline.csv")
+readr::write_csv(dplyr::arrange(gsea_Int,padj, pval) %>% dplyr::select(-leadingEdge),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/fgsea_GO_BP_full_Interaction.csv")
+readr::write_csv(dplyr::arrange(gsea_Bas,padj, pval) %>% dplyr::select(-leadingEdge),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/fgsea_GO_BP_full_Baseline.csv")
+
+
+
+```
+
+### Top significant GSEA (GO:BP) pathways
+
+```{r Top_10_GO_BP, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+top_k<- gsea_all %>%
+  dplyr::filter(!is.na(padj), padj <= alpha) %>%              
+  dplyr::group_by(contrast) %>%
+  dplyr::arrange(padj, dplyr::desc(abs(NES)), pathway, .by_group = TRUE) %>%  
+  dplyr::slice_head(n = 10) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(
+    path_label = gsub("^GOBP_", "", pathway),
+    path_label = gsub("_", " ", path_label),
+    id = paste(contrast, path_label, sep = "|")) %>%
+  dplyr::group_by(contrast) %>%
+  dplyr::mutate(id = factor(id, levels = rev(unique(id)))) %>%
+  dplyr::ungroup()
+
+ggplot(top_k, aes(x = id, y = NES, fill = NES > 0)) +
+  geom_col() +
+  coord_flip() +
+  facet_wrap(~ contrast, scales = "free_y") +
+  scale_x_discrete(labels = function(x) wrap_lab(sub("^[^|]*\\|", "", x), width = 32)) +
+  scale_fill_manual(
+    values = c("TRUE" = "firebrick", "FALSE" = "steelblue"),
+    name   = "Direction",
+    labels = c("FALSE" = "Enriched among genes lower in this contrast",
+               "TRUE"  = "Enriched among genes higher in this contrast")) +
+  labs(title = sprintf("Top 10 GO:BP pathways per contrast (FDR <=0.05)", alpha),
+    subtitle = NULL,
+    x = NULL, y = "Normalised Enrichment Score (NES)") +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(face = "bold"))
+
+```
+
+## Mitch pathways
+
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+
+deseq_to_prescore <- function(res_obj) {
+  as.data.frame(res_obj) %>%
+    rownames_to_column("ensgene") %>%
+    mutate(ensgene = sub("\\.\\d+$", "", ensgene)) %>%
+    filter(!is.na(stat)) %>%
+    dplyr::select(ensgene, score = stat) %>%
+    group_by(ensgene) %>%
+    slice_max(order_by = abs(score), n = 1) %>%
+    ungroup() %>%
+    column_to_rownames("ensgene")
+}
+
+x_F<- deseq_to_prescore(res_F_raw)
+x_M <- deseq_to_prescore(res_M_raw)
+x_Int<- deseq_to_prescore(res_int_raw)
+x_Bas<- deseq_to_prescore(res_bsl_raw)
+
+geneTable<- ann %>%
+  filter(!is.na(symbol), symbol != "") %>%
+  dplyr::select(gene = symbol, ensgene)
+
+# Hallmark
+msig_hall<- msigdbr(
+  species= "Mus musculus",
+  category= "H") %>%
+  dplyr::select(gs_name, gene_symbol) %>%
+  distinct() %>%
+  group_by(gs_name) %>%
+  summarise(genes = list(gene_symbol), .groups = "drop") %>%
+  tibble::deframe()
+
+# GO:BP
+msig_gobp<- msigdbr(
+  species= "Mus musculus",
+  category= "C5",
+  subcategory= "GO:BP") %>%
+  dplyr::select(gs_name, gene_symbol) %>%
+  distinct() %>%
+  group_by(gs_name) %>%
+  summarise(genes = list(gene_symbol), .groups = "drop") %>%
+  tibble::deframe()
+
+# run mitch for one contrast
+run_mitch_one<- function(x_mat, genesets, label) {
+  mobj <- mitch_import(
+    x= x_mat,
+    DEtype= "prescored",
+    geneTable= geneTable)
+  mres<- mitch_calc(
+    x = mobj,
+    genesets= genesets,
+    minsetsize= 5,
+    cores= CORES,
+    priority= "effect")
+  out<- mres$enrichment_result %>%
+    mutate(
+      contrast= label,
+      set_clean= gsub("_", " ", gsub("^HALLMARK_|^GOBP_", "", set)))
+  return(out)
+}
+
+#4 contrasts (hallmark)
+hall_F<- run_mitch_one(x_F, msig_hall, "F Ang-II vs Saline")
+hall_M<- run_mitch_one(x_M, msig_hall, "M Ang-II vs Saline")
+hall_Int<- run_mitch_one(x_Int, msig_hall, "Interaction (M vs F)")
+hall_Bas<- run_mitch_one(x_Bas, msig_hall, "Baseline M vs F")
+
+hall_all<- bind_rows(hall_F, hall_M, hall_Int, hall_Bas)
+
+readr::write_csv(dplyr::arrange(hall_all, p.adjustANOVA, pANOVA),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/mitch_hallmark_full_all_contrasts.csv")
+
+
+
+#sig + top 10 per contrast
+hall_top10<- hall_all %>%
+  filter(!is.na(p.adjustANOVA), p.adjustANOVA < 0.05, setSize >= 5) %>%
+  arrange(contrast, p.adjustANOVA, desc(abs(s.dist))) %>%
+  group_by(contrast) %>%
+  slice_head(n = 10) %>%
+  ungroup()
+
+hall_top10
+
+#4 contrasts(GO:BP)
+gobp_F<- run_mitch_one(x_F, msig_gobp, "F Ang-II vs Saline")
+gobp_M<- run_mitch_one(x_M, msig_gobp, "M Ang-II vs Saline")
+gobp_Int<- run_mitch_one(x_Int, msig_gobp, "Interaction (M vs F)")
+gobp_Bas<- run_mitch_one(x_Bas, msig_gobp, "Baseline M vs F")
+
+gobp_all<- bind_rows(gobp_F, gobp_M, gobp_Int, gobp_Bas)
+
+readr::write_csv(dplyr::arrange(gobp_all,  p.adjustANOVA, pANOVA),
+                 "/mnt/vol1/Mouse_model_RNA_Seq/pathway_Results/mitch_gobp_full_all_contrasts.csv")
+
+gobp_top10<- gobp_all %>%
+  filter(!is.na(p.adjustANOVA), p.adjustANOVA < 0.05, setSize >= 5) %>%
+  arrange(contrast, p.adjustANOVA, desc(abs(s.dist))) %>%
+  group_by(contrast) %>%
+  slice_head(n = 10) %>%
+  ungroup()
+
+gobp_top10
+
+```
+
+### Top significant mitch (Hallmark and GO:BP) pathways
+
+```{r plot_mitch, fig.width=12, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+# Hallmark pathways
+
+hall_top10$contrast<- factor(
+  hall_top10$contrast,
+  levels= c(
+    "F Ang-II vs Saline",
+    "M Ang-II vs Saline",
+    "Interaction (M vs F)",
+    "Baseline M vs F"
+  )
+)
+
+ggplot(hall_top10,
+       aes(x = reorder(set_clean, s.dist), y = s.dist, fill = s.dist > 0)) +
+  geom_col() +
+  coord_flip() +
+  facet_wrap(~ contrast, scales = "free_y") +
+  scale_fill_manual(
+    values= c("TRUE" = "firebrick", "FALSE" = "steelblue"),
+    name= "Direction",
+    labels= c("FALSE" = "Enriched among genes lower in this contrast", "TRUE" = "Enriched among genes higher in this contrast")) +
+  labs(
+    title = "mitch: Hallmark pathways (top 10 per contrast)",
+    x = NULL,
+    y = "mitch s.dist") +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold"))
+
+# GO:BP pathways
+gobp_top10$contrast<- factor(
+  gobp_top10$contrast,
+  levels = c(
+    "F Ang-II vs Saline",
+    "M Ang-II vs Saline",
+    "Interaction (M & F)",
+    "Baseline M vs F"
+  )
+)
+
+ggplot(gobp_top10,
+       aes(x = reorder(set_clean, s.dist), y = s.dist, fill = s.dist > 0)) +
+  geom_col() +
+  coord_flip() +
+  facet_wrap(~ contrast, scales = "free_y") +
+  scale_fill_manual(
+    values = c("TRUE" = "firebrick", "FALSE" = "steelblue"),
+    name   = "Direction",
+    labels = c("FALSE" = "Enriched among genes lower in this contrast", "TRUE" = "Enriched among genes higher in this contrast")) +
+  labs(
+    title = "mitch: GO:BP pathways (top 10 per contrast)",
+    x = NULL,
+    y = "mitch s.dist") +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold"))
+
+```
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+sessionInfo()
+
+```
