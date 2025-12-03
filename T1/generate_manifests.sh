@@ -16,7 +16,7 @@ fi
 RESULTS_DIR="/mnt/vol1/Mouse_model_RNA_Seq/T1/kallisto_results"
 
 # Outputs
-ALIGN_SUM="${RESULTS_DIR}/alignment_summary.tsv"
+ALIGN_SUM="/mnt/vol1/Mouse_model_RNA_Seq/T1/alignment_summary.tsv"
 SAMPLES_TXT="${RESULTS_DIR}/samples.txt"
 SAMPLES_MANIFEST="${RESULTS_DIR}/samples_manifest.tsv"
 
