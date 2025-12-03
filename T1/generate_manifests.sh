@@ -12,7 +12,7 @@ else
   echo "[INFO] jq not found: falling back to grep/cut/awk"
 fi
 
-RESULTS_DIR="/mnt/vol1/Mouse_model_RNA_Seq/kallisto_results_plus_ncRNA"
+RESULTS_DIR="/mnt/vol1/Mouse_model_RNA_Seq/T1/kallisto_results"
 
 # Outputs
 ALIGN_SUM="${RESULTS_DIR}/alignment_summary.tsv"
