@@ -3,7 +3,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # ---- CONFIG  ----
-PROJ_DIR="/mnt/vol1/Mouse_model_RNA_Seq"
+PROJ_DIR="/mnt/vol1/Mouse_model_RNA_Seq/T1"
 INDEX_DIR="$PROJ_DIR/index"
 GTF_GZ="$INDEX_DIR/Mus_musculus.GRCm39.115.gtf.gz"
 GTF="$INDEX_DIR/Mus_musculus.GRCm39.115.gtf"

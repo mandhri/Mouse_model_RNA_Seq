@@ -1,0 +1,14 @@
+{
+	"n_targets": 275134,
+	"n_bootstraps": 0,
+	"n_processed": 131133735,
+	"n_pseudoaligned": 93272105,
+	"n_unique": 33593301,
+	"p_pseudoaligned": 71.1,
+	"p_unique": 25.6,
+	"kallisto_version": "0.51.1",
+	"index_version": 13,
+	"k-mer length": 31,
+	"start_time": "Sun Nov 23 20:09:55 2025",
+	"call": "kallisto quant -i /scratch/bx96/ma9796/rnaseq_project/index/mouse_transcriptome_plus_ncRNA.k31.idx -o /scratch/bx96/ma9796/rnaseq_project/kallisto_results/BB455 -t 6 /scratch/bx96/ma9796/rnaseq_project/trimmed/BB455_R1.trimmed.fastq.gz /scratch/bx96/ma9796/rnaseq_project/trimmed/BB455_R2.trimmed.fastq.gz"
+}
