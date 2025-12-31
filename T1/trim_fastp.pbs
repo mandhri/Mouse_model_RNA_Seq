@@ -1,0 +1,20 @@
+#!/bin/bash
+#PBS -P bx96
+#PBS -q normal
+#PBS -N trim_fastp_all
+#PBS -l ncpus=6
+#PBS -l mem=16GB
+#PBS -l walltime=08:00:00
+#PBS -l storage=scratch/bx96
+
+
+set -euo pipefail
+
+cd /scratch/bx96/ma9796/rnaseq_project
+
+source /scratch/bx96/ma9796/conda/miniforge3/etc/profile.d/conda.sh
+conda activate rnaseq-trim
+
+
+bash scripts/trim_fastp_all.sh
+

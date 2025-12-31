@@ -1,0 +1,567 @@
+---
+title: "RNA-Seq_differential_expression_analysis"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+    fig_width: 10
+    fig_height: 8
+  pdf_document:
+    toc: yes
+theme: cosmo
+date: "2025-10-18"
+---
+
+```{r,packages}
+
+
+suppressPackageStartupMessages({
+library("EnhancedVolcano")
+library("limma")
+library("biomaRt")
+library("annotables")
+library("tximport")
+library("apeglm")
+library("eulerr")
+library("DESeq2")
+library("HGNChelper")
+library("tictoc")
+library("DESeq2")
+library("kableExtra")
+library("beeswarm")
+library("missMethyl")
+library("gridExtra")
+library("png")
+library("metafor")
+library("ggplot2")
+library("purrr")
+library("metafor")
+library("AnnotationDbi")
+library("readxl")
+library("ggplot2")
+library("tidyverse")
+library("magrittr")
+library("readr")
+library("eulerr")
+library("RColorBrewer")
+library("e1071")
+library("plotly") 
+library("pheatmap")
+library("msigdbr")
+library("mitch")
+  library("rtracklayer")
+  library("dplyr")
+  library("org.Mm.eg.db")
+  library("fgsea")
+  
+})
+
+CORES=16
+
+```
+
+# Sample manifest and alignment summary
+
+Kallisto alignments for each sample was run against the cDNA + ncRNA index and compared the pseudoalignment rates were checked. The runs using the cDNA + ncRNA index showed higher alignment percentages. Hence, cDNA + ncRNA index was used for all downstream analyses.
+
+```{r alignment, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+base<- "/mnt/vol1/Mouse_model_RNA_Seq/T1/kallisto_results/"
+idx<- "/mnt/vol1/Mouse_model_RNA_Seq/index"
+
+samples<- read_tsv(file.path(base,"samples.txt"),col_names = "sample", show_col_types = FALSE)
+samples$path <- file.path(base, samples$sample, "abundance.tsv")
+
+align<- read_delim("/mnt/vol1/Mouse_model_RNA_Seq/T1/alignment_summary.tsv")
+
+df<- align%>% mutate(index = "cDNA + ncRNA", rate = 100 * pseudoaligned/processed) %>%
+ select(sample, index, rate)
+
+
+delta<- df %>% pivot_wider(names_from = index, values_from = rate) %>%
+  mutate(delta = `cDNA + ncRNA`) %>%
+  arrange(delta)
+df$sample <- factor(df$sample, levels = delta$sample)
+
+ggplot(df, aes(sample, rate, fill = index)) +
+  geom_col(position = position_dodge(width = 0.75), width = 0.7) +
+  labs(title = "Pseudoalignment rate by sample",
+       x = "Sample", y = "Rate (%)", fill = "Run") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+```
+
+# Import transcripts to gene level via trimport package
+
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+
+tx2gene<- read.csv(file.path("/mnt/vol1/Mouse_model_RNA_Seq/T1/tx2gene_r115.csv"), stringsAsFactors = FALSE)
+stopifnot(all(c("TXNAME","GENEID") %in% names(tx2gene)))
+
+files<- file.path(base, samples$sample, "abundance.tsv")
+names(files) <- samples$sample
+stopifnot(all(file.exists(files)))
+
+txi<- tximport(files,
+                type = "kallisto",
+                tx2gene = tx2gene[, c("TXNAME","GENEID")],
+                countsFromAbundance = "lengthScaledTPM",
+                ignoreTxVersion = TRUE)
+
+txi$counts[1:2, 1:6] 
+
+```
+
+# Reading meta data that comes with the samples
+
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+
+pheno<- read_excel("/mnt/vol1/Mouse_model_RNA_Seq/T1/Pheno.xlsx")
+colnames(pheno)
+
+coldata<- pheno
+rownames(coldata)<- coldata$ID
+
+```
+
+# Making DESeqDataSet from tximport ,filter the low counts and normalisation of the counts
+
+DESeq2 object from the imported counts, set the design to use Group. Removed genes with very low total counts across samples (sum <= 10)
+
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+
+dds<- DESeqDataSetFromTximport(txi, colData = coldata, design = ~ Group)
+
+keep<- rowSums(counts(dds)) >= 10
+dds<- dds[keep, ]
+
+dds <- DESeq(dds)
+
+norm_counts <- counts(dds, normalized = TRUE)
+
+```
+
+
+# Unsupervised clustering analyses
+
+I variance-stabilised the counts and used them to check sample structure. First, I plotted a sample–sample correlation heatmap (annotated Group) to spot outliers. Then I ran a PCA, colouring by Group, to see if groups separate. After that, fit the DESeq2 model with the interaction.
+
+```{r PCA, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+vsd<- vst(dds, blind = TRUE)
+
+ann<- as.data.frame(colData(dds))[, c("Group"), drop = FALSE]
+
+pheatmap(cor(assay(vsd)),
+         annotation_col = ann,
+         annotation_row = ann) 
+
+plotPCA(vsd, intgroup = c("Group"))
+
+
+plotDispEsts(dds)
+
+res <- results(dds,
+               contrast = c("Group", "DIABETIC", "NONDIABETIC"),
+               alpha = 0.05)
+
+plotMA(res)
+
+```
+
+
+# Heatmap: all genes)
+
+
+```{r heatmap_1, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+
+vsd_mat<- assay(vsd)
+vsd_mat_scaled <- t(scale(t(vsd_mat)))
+
+
+ens_full<- rownames(vsd_mat)
+ens_stripped<- sub("\\.\\d+$", "", ens_full)
+symbol_vec<- AnnotationDbi::mapIds(
+  org.Mm.eg.db,
+  keys     = ens_stripped,
+  keytype  = "ENSEMBL",
+  column   = "SYMBOL",
+  multiVals = "first"
+)
+
+norm_expr_df<- as.data.frame(vsd_mat)
+norm_expr_df$Gene<- ens_full       
+norm_expr_df$Symbol <- unname(symbol_vec[ens_stripped])
+norm_expr_df <- norm_expr_df[, c("Gene", "Symbol",
+                                 setdiff(names(norm_expr_df),
+                                         c("Gene", "Symbol")))]
+
+write.csv(norm_expr_df,"/mnt/vol1/Mouse_model_RNA_Seq/T1/normalised_vst_expression.csv", row.names = FALSE)
+
+ann <- as.data.frame(colData(vsd))[, "Group", drop = FALSE]
+ord_cols <- order(vsd$Group)
+
+pheatmap(vsd_mat_scaled[, ord_cols],
+         annotation_col = ann[ord_cols, , drop = FALSE],
+         show_rownames = FALSE,
+         cluster_cols  = TRUE,
+         main = "All genes: DIABETIC vs NONDIABETIC")
+
+
+
+```
+
+
+
+# Heatmaps (top 40 genes by FDR)
+
+
+```{r heatmap, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+
+top_heatmap_simple <- function(res, vsd, n = 40) {
+  ord  <- order(res$padj, na.last = NA)
+  keep <- ord[1:min(n, sum(!is.na(res$padj)))]
+  
+  genes <- rownames(res)[keep]
+  mat   <- assay(vsd)[genes, , drop = FALSE]
+  mat   <- t(scale(t(mat))) 
+  
+  ann <- as.data.frame(colData(vsd))[, "Group", drop = FALSE]
+  
+  pheatmap(mat,
+           annotation_col = ann,
+           show_rownames = TRUE,
+           main = paste0("Top ", length(genes),
+                         " DE genes: DIABETIC vs NONDIABETIC"))
+}
+
+## Top 40 DE genes
+top_heatmap_simple(res, vsd, n = 40)
+
+
+```
+
+# Heatmaps of significant genes only
+
+
+```{r het_sig, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+sig_idx <- which(res$padj <= 0.05 & !is.na(res$padj))
+length(sig_idx) 
+
+genes_sig <- rownames(res)[sig_idx]
+
+mat_sig <- vsd_mat[genes_sig, , drop = FALSE]
+mat_sig_scaled <- t(scale(t(mat_sig)))
+  
+ann <- as.data.frame(colData(vsd))[, "Group", drop = FALSE]
+ord_cols <- order(vsd$Group)
+  
+pheatmap(mat_sig_scaled[, ord_cols],
+           annotation_col = ann[ord_cols, , drop = FALSE],
+           show_rownames = (length(sig_idx) <= 50),
+           main = "FDR-significant genes (FDR <= 0.05): DIABETIC vs NONDIABETIC")
+
+
+```
+
+
+# Pathway enrichment Analysis
+
+
+## GSEA (Hallmarks)
+
+MSigDB “Hallmarks” (collection H) = 50 core biological with minimal overlap gene sets that capture broad, well-defined biological processes. 
+
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+
+#Map ensembl
+ens_all <- rownames(res)
+ens_all_stripped <- sub("\\.\\d+$", "", ens_all)
+
+ann_entrez <- tibble(ENSEMBL = ens_all_stripped) %>%
+  distinct() %>%
+  mutate(
+    ENTREZID = AnnotationDbi::mapIds(
+      org.Mm.eg.db,
+      keys     = ENSEMBL,
+      keytype  = "ENSEMBL",
+      column   = "ENTREZID",
+      multiVals = "first"
+    )
+  ) %>%
+  filter(!is.na(ENTREZID))
+
+#ranked stat vector (Wald statistic) on entrez iDs
+rank_df <- as.data.frame(res) %>%
+  rownames_to_column("ensgene") %>%
+  mutate(ENSEMBL = sub("\\.\\d+$", "", ensgene)) %>%
+  left_join(ann_entrez, by = "ENSEMBL") %>%
+  filter(!is.na(stat), !is.na(ENTREZID))
+
+rank_df_unique <- rank_df %>%
+  group_by(ENTREZID) %>%
+  summarise(stat = stat[which.max(abs(stat))], .groups = "drop")
+
+ranks <- rank_df_unique$stat
+names(ranks) <- rank_df_unique$ENTREZID
+ranks <- sort(ranks, decreasing = TRUE)
+
+#Hallmark gene sets (Mouse, Entrez IDs)
+msig_entrez <- msigdbr(species = "Mus musculus", category = "H") %>%
+  distinct(gs_name, entrez_gene) %>%
+  group_by(gs_name) %>%
+  summarise(genes = list(unique(entrez_gene)), .groups = "drop") %>%
+  tibble::deframe()
+
+# GSEA
+gsea_hallmark <- fgseaMultilevel(
+  pathways = msig_entrez,
+  stats    = ranks,
+  minSize  = 10,
+) %>%
+  arrange(padj) %>%
+  mutate(contrast = "DIABETIC vs NONDIABETIC")
+
+# top 20 Hallmark pathways
+gsea_hallmark_20 <- gsea_hallmark %>%
+  select(pathway, NES, padj, contrast) %>%
+  head(20)
+
+
+```
+
+### Top significant GSEA (Hallmarks) pathways
+
+
+I used Gene Ratio here. Gene ratio comes in clusterprofiler package under the dotplot.
+In the gsea, it says 
+"The leading-edge subset is a subset of genes within a gene set that drives the enrichment signal, while the "set size" is the total number of genes in the original gene set
+"
+So I used the \(\text{Gene Ratio}=\frac{\text{Count of  core enrichment genes}}{\text{Total count of genes in the pathway gene set}}\)  to calculate the Gene Ratio. 
+
+References:https://github.com/YuLab-SMU/clusterProfiler/issues/364 
+
+
+
+```{r Top_10_Hallmark, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+alpha <- 0.05
+
+
+
+dot_df <- gsea_hallmark %>%
+  filter(!is.na(padj), padj <= alpha) %>%
+  mutate(
+    direction = ifelse(
+      NES > 0,
+      "Enriched in\ndiabetes",
+      "Suppressed in\ndiabetes"
+    ),
+    Count      = purrr::map_int(leadingEdge, length),
+    GeneRatio  = Count / size,
+    path_clean = gsub("^HALLMARK_", "", pathway),
+    path_clean = gsub("_", " ", path_clean)
+  ) %>%
+  arrange(padj, dplyr::desc(abs(NES))) %>%
+  group_by(direction) %>%
+  slice_head(n = 10) %>%            
+  ungroup() %>%
+  mutate(
+    direction  = factor(direction,
+                        levels = c("Enriched in\ndiabetes",
+                                   "Suppressed in\ndiabetes")),
+    path_clean = factor(path_clean, levels = rev(unique(path_clean)))
+  )
+
+#DOT PLOT
+ggplot(dot_df, aes(x = GeneRatio, y = path_clean)) +
+  geom_point(aes(size = Count, colour = padj)) +
+  facet_wrap(~ direction, ncol = 2, scales = "free_y") +
+  scale_size_continuous(name = "Leading-edge genes") +
+  scale_colour_gradient(
+    low  = "red",
+    high = "blue",
+    name = "FDR (padj)"
+  ) +
+  labs(
+    title = "Top HALLMARK pathways in diabetic vs non-diabetic males",
+    x = "GeneRatio (leading-edge / set size)",
+    y = NULL
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    strip.text       = element_text(face = "bold", size = 12),
+    axis.text.y      = element_text(face = "bold", size = 10),
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.major = element_line(colour = "grey90", size = 0.3)
+  )
+
+
+#BAR PLOT
+bar_df <- dot_df %>%
+  mutate(
+    dir_simple = ifelse(NES > 0,
+                        "Up-regulated pathways",
+                        "Down-regulated pathways")) %>% 
+  arrange(NES)                  
+
+bar_df$path_clean <- factor(bar_df$path_clean, levels = bar_df$path_clean)
+
+ggplot(bar_df, aes(x = path_clean, y = NES, fill = dir_simple)) +
+  geom_col() +
+  coord_flip() +                
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40") +
+  scale_fill_manual(
+    values = c("Up-regulated pathways"   = "#b2182b",
+               "Down-regulated pathways" = "#2166ac"),
+    name = NULL
+  ) +
+  labs(
+    title = "Top HALLMARK pathways in diabetic vs non-diabetic males",
+    x = NULL,
+    y = "Normalised Enrichment Score (NES)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.y     = element_text(face = "bold", size = 10),
+    plot.title      = element_text(face = "bold", hjust = 0.5),
+    legend.position = "left"
+  )
+
+
+
+```
+
+## GSEA (GO:BP)
+
+GO:BP (MSigDB C5, Biological Process) contains a larger set of more specific, ontology-based pathways that describe defined biological activities
+
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+
+# GO: BP pathways (msigdbr), grouped by gs_name
+msig_entrez<- msigdbr(species="Mus musculus", category="C5", subcategory = "GO:BP")%>%
+  distinct(gs_name, entrez_gene) %>%
+  group_by(gs_name) %>%
+  summarise(genes = list(unique(entrez_gene)), .groups = "drop") %>%
+  tibble::deframe()
+
+# GSEA
+gsea_GO_BP <- fgseaMultilevel(
+  pathways = msig_entrez,
+  stats    = ranks,
+  minSize  = 10,
+) %>%
+  arrange(padj) %>%
+  mutate(contrast = "DIABETIC vs NONDIABETIC")
+
+# top 20 GO_BP pathways
+gsea_GO_BP_20<-gsea_GO_BP %>%
+  select(pathway, NES, padj, contrast) %>%
+  head(20)
+
+```
+
+### Top significant GSEA (GO:BP) pathways
+
+```{r Top_10_GO_BP, fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+
+alpha <- 0.05
+
+gsea_GO_BP_df <- as_tibble(gsea_GO_BP)
+
+dot_df <- gsea_GO_BP %>%
+  filter(!is.na(padj), padj <= alpha) %>%
+  mutate(
+    direction = ifelse(
+      NES > 0,
+      "Enriched in\ndiabetes",
+      "Suppressed in\ndiabetes"
+    ),
+    Count      = purrr::map_int(leadingEdge, length),
+    GeneRatio  = Count / size,
+    path_clean = gsub("^GOBP_", "", pathway),
+    path_clean = gsub("_", " ", path_clean)
+  ) %>%
+  arrange(padj, dplyr::desc(abs(NES))) %>%
+  group_by(direction) %>%
+  slice_head(n = 10) %>%            
+  ungroup() %>%
+  mutate(
+    direction  = factor(direction,
+                        levels = c("Enriched in\ndiabetes",
+                                   "Suppressed in\ndiabetes")),
+    path_clean = factor(path_clean, levels = rev(unique(path_clean)))
+  )
+
+#DOT PLOT
+x<-ggplot(dot_df, aes(x = GeneRatio, y = path_clean)) +
+  geom_point(aes(size = Count, colour = padj)) +
+  facet_wrap(~ direction, ncol = 2, scales = "free_y") +
+  scale_size_continuous(name = "Leading-edge genes") +
+  scale_colour_gradient(
+    low  = "red",
+    high = "blue",
+    name = "FDR (padj)"
+  ) +
+  labs(
+    title = "Top GO_BP pathways in diabetic vs non-diabetic males",
+    x = "GeneRatio (leading-edge / set size)",
+    y = NULL
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    strip.text       = element_text(face = "bold", size = 12),
+    axis.text.y      = element_text(face = "bold", size = 10),
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.major = element_line(colour = "grey90", size = 0.3)
+  )
+knitr::include_graphics("/mnt/vol1/Mouse_model_RNA_Seq/T1/GO_BP_PATHWAYS.png")
+
+
+#BAR PLOT
+bar_df <- dot_df %>%
+  mutate(
+    dir_simple = ifelse(NES > 0,
+                        "Up-regulated pathways",
+                        "Down-regulated pathways")) %>% 
+  arrange(NES)                  
+
+bar_df$path_clean <- factor(bar_df$path_clean, levels = bar_df$path_clean)
+
+ggplot(bar_df, aes(x = path_clean, y = NES, fill = dir_simple)) +
+  geom_col() +
+  coord_flip() +                
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40") +
+  scale_fill_manual(
+    values = c("Up-regulated pathways"   = "#b2182b",
+               "Down-regulated pathways" = "#2166ac"),
+    name = NULL
+  ) +
+  labs(
+    title = "Top GO_BP pathways in diabetic vs non-diabetic males",
+    x = NULL,
+    y = "Normalised Enrichment Score (NES)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.y     = element_text(face = "bold", size = 10),
+    plot.title      = element_text(face = "bold", hjust = 0.5),
+    legend.position = "left"
+  )
+
+
+
+```
+
+
+```{r fig.width=11, fig.height=9, message=FALSE, warning=FALSE, echo=TRUE}
+
+sessionInfo()
+
+```
